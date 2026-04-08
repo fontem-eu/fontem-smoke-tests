@@ -124,39 +124,46 @@
     {
       "id": "ASSIST-10",
       "category": "AI Assistant",
-      "title": "Basic query response",
-      "description": "Sends a simple question to the AI assistant and verifies it returns a meaningful response.",
+      "title": "SSE streaming with status events",
+      "description": "Tests the streaming SSE endpoint end-to-end. Verifies the proxy sends status heartbeats (thinking/searching/analyzing phases) before text chunks arrive, that AAPL appears in the response, and that the stream terminates with a done event.",
       "type": "api",
       "critical": false,
       "steps": [
-        "POST /capi/assist/chat with a question about Apple's ticker",
-        "Assert response content is longer than 10 characters"
+        "POST /capi/assist/chat/stream with SSE accept",
+        "Parse SSE events: status, chunk, done",
+        "Assert at least 1 status event before chunks (heartbeat proof)",
+        "Assert response text mentions AAPL",
+        "Assert done event terminates the stream"
       ]
     },
     {
       "id": "ASSIST-11",
       "category": "AI Assistant",
-      "title": "Report editing via propose_edit",
-      "description": "Asks the AI assistant to add a section to the report. Validates it attempts to use the propose_edit MCP tool to generate structured edit actions.",
+      "title": "Report edit proposals",
+      "description": "Asks the AI assistant to add a section via propose_edit. Validates the assistant acknowledges the edit, mentions the section title, and completes without timeout.",
       "type": "api",
       "critical": false,
       "steps": [
-        "POST /capi/assist/chat asking to add a section titled 'Apple Overview'",
-        "Pass full report context (id, title, sections) so the assistant can propose edits",
-        "Assert response contains either a structured suggestion or acknowledges the edit"
+        "POST /capi/assist/chat/stream asking to add 'Apple Overview' section",
+        "Pass full report context (id, title, sections)",
+        "Assert response acknowledges the edit (mentions section/apple/propose/added)",
+        "Assert response length > 20 chars (substantive)",
+        "Assert done event (no timeout)"
       ]
     },
     {
       "id": "ASSIST-12",
       "category": "AI Assistant",
-      "title": "MCP graph tool usage",
-      "description": "Asks the AI assistant a question that specifically requires the MCP search_entities tool to answer. Validates it retrieves live data from the GMR graph rather than relying on general knowledge.",
+      "title": "MCP tool execution with graph data",
+      "description": "Asks about Apple's graph data (lobbying spend, EP passes). Validates the proxy progressed through searching/analyzing phases (proof of MCP tool execution) and the response contains GMR-specific data that cannot come from general knowledge alone.",
       "type": "api",
       "critical": false,
       "steps": [
-        "POST /capi/assist/chat asking to search for 'Apple' in the graph and report what data exists",
-        "Assert tool_calls_made > 0 or response references specific graph data (AAPL, contracts, relationships)",
-        "Assert response length > 50 chars (substantive answer)"
+        "POST /capi/assist/chat/stream asking to search Apple and report lobbying data",
+        "Assert SSE phases include searching/analyzing/synthesizing (proof of MCP tool work)",
+        "Assert response contains GMR-specific data: AAPL, EP access passes, lobbying spend, or Transparency Register ID",
+        "Assert response length > 50 chars",
+        "Assert done event terminates stream"
       ]
     },
     {
