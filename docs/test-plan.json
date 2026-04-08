@@ -1,0 +1,176 @@
+{
+  "name": "GMR Production Smoke Tests",
+  "description": "Validates critical user flows against the live GMR platform. Runs every 8 hours as a Kubernetes CronJob.",
+  "target": "https://gmr.void42.net",
+  "schedule": "0 */8 * * *",
+  "flows": [
+    {
+      "id": "AUTH-01",
+      "category": "Authentication",
+      "title": "Login page renders",
+      "description": "Navigates to /login and verifies the email, password, and submit fields are visible.",
+      "type": "ui",
+      "critical": true,
+      "steps": [
+        "Navigate to /login",
+        "Assert email input [data-testid=login-email] is visible",
+        "Assert password input [data-testid=login-password] is visible",
+        "Assert submit button [data-testid=login-submit] is visible"
+      ]
+    },
+    {
+      "id": "AUTH-02",
+      "category": "Authentication",
+      "title": "Email/password login",
+      "description": "Logs in with test credentials and verifies redirect to home page with navigation visible.",
+      "type": "ui",
+      "critical": true,
+      "steps": [
+        "Fill email and password fields with test credentials",
+        "Click submit",
+        "Wait for redirect to /",
+        "Assert navigation tabs [data-testid=app-nav] are visible"
+      ]
+    },
+    {
+      "id": "AUTH-03",
+      "category": "Authentication",
+      "title": "Session persists in header",
+      "description": "After login, the sign-out button appears in the header confirming an active session.",
+      "type": "ui",
+      "critical": true,
+      "steps": [
+        "Login with test credentials",
+        "Assert sign-out button [data-testid=sign-out-btn] is visible"
+      ]
+    },
+    {
+      "id": "SEARCH-04",
+      "category": "Search & Browse",
+      "title": "Entity search returns results",
+      "description": "Searches for 'Apple' on the landing page and verifies AAPL appears in the results.",
+      "type": "ui",
+      "critical": true,
+      "steps": [
+        "Navigate to /",
+        "Type 'Apple' in the search input",
+        "Wait for result cards to appear",
+        "Assert first result contains ticker 'AAPL'"
+      ]
+    },
+    {
+      "id": "BROWSE-05",
+      "category": "Search & Browse",
+      "title": "Company profile loads",
+      "description": "Opens the Apple Inc fundamentals page and verifies financial data panel renders.",
+      "type": "ui",
+      "critical": true,
+      "steps": [
+        "Navigate to /c/AAPL/fundamentals",
+        "Assert financials panel [data-testid=financials-panel] is visible",
+        "Assert company name contains 'APPLE'"
+      ]
+    },
+    {
+      "id": "GRAPH-06",
+      "category": "Search & Browse",
+      "title": "Graph Explorer renders (WebGL)",
+      "description": "Opens the Apple graph explorer and verifies the Sigma.js WebGL canvas initializes.",
+      "type": "ui",
+      "critical": true,
+      "steps": [
+        "Navigate to /c/AAPL/graph",
+        "Wait for graph container, .ge-canvas, or canvas element (timeout 15s)"
+      ]
+    },
+    {
+      "id": "REPORT-07",
+      "category": "Report CRUD",
+      "title": "Create report",
+      "description": "Creates a new report via the community API and verifies the response contains a valid ID and title.",
+      "type": "api",
+      "critical": true,
+      "steps": [
+        "POST /capi/auth/login to get JWT",
+        "POST /capi/reports with title and abstract",
+        "Assert response contains id and matching title"
+      ]
+    },
+    {
+      "id": "REPORT-08",
+      "category": "Report CRUD",
+      "title": "Add section to report",
+      "description": "Adds an HTML section to the report and verifies the content is stored correctly.",
+      "type": "api",
+      "critical": true,
+      "steps": [
+        "POST /capi/reports/{id}/sections with HTML content",
+        "Assert response contains the content text"
+      ]
+    },
+    {
+      "id": "REPORT-09",
+      "category": "Report CRUD",
+      "title": "Report persists",
+      "description": "Fetches the report by ID and verifies title and sections survived across requests.",
+      "type": "api",
+      "critical": true,
+      "steps": [
+        "GET /capi/reports/{id}",
+        "Assert title matches",
+        "Assert at least 1 section exists with correct content"
+      ]
+    },
+    {
+      "id": "ASSIST-10",
+      "category": "AI Assistant",
+      "title": "Basic query response",
+      "description": "Sends a simple question to the AI assistant and verifies it returns a meaningful response.",
+      "type": "api",
+      "critical": false,
+      "steps": [
+        "POST /capi/assist/chat with a question about Apple's ticker",
+        "Assert response content is longer than 10 characters"
+      ]
+    },
+    {
+      "id": "ASSIST-11",
+      "category": "AI Assistant",
+      "title": "Report editing via propose_edit",
+      "description": "Asks the AI assistant to add a section to the report. Validates it attempts to use the propose_edit MCP tool to generate structured edit actions.",
+      "type": "api",
+      "critical": false,
+      "steps": [
+        "POST /capi/assist/chat asking to add a section titled 'Apple Overview'",
+        "Pass full report context (id, title, sections) so the assistant can propose edits",
+        "Assert response contains either a structured suggestion or acknowledges the edit"
+      ]
+    },
+    {
+      "id": "ASSIST-12",
+      "category": "AI Assistant",
+      "title": "MCP graph tool usage",
+      "description": "Asks the AI assistant a question that specifically requires the MCP search_entities tool to answer. Validates it retrieves live data from the GMR graph rather than relying on general knowledge.",
+      "type": "api",
+      "critical": false,
+      "steps": [
+        "POST /capi/assist/chat asking to search for 'Apple' in the graph and report what data exists",
+        "Assert tool_calls_made > 0 or response references specific graph data (AAPL, contracts, relationships)",
+        "Assert response length > 50 chars (substantive answer)"
+      ]
+    },
+    {
+      "id": "CLEANUP-13",
+      "category": "Cleanup",
+      "title": "Delete test report",
+      "description": "Deletes the smoke test report and verifies it no longer appears in the report listing.",
+      "type": "api",
+      "critical": true,
+      "steps": [
+        "DELETE /capi/reports/{id}",
+        "Assert 204 status",
+        "GET /capi/reports and assert the report ID is not in the list"
+      ]
+    }
+  ]
+}

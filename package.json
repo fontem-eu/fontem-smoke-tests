@@ -1,0 +1,16 @@
+{
+  "name": "gmr-smoke-tests",
+  "version": "1.0.0",
+  "description": "Production smoke tests for GMR platform — runs every 8 hours",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:chromium": "npx playwright test --project=chromium",
+    "lint": "eslint tests/"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "eslint": "^9.26.0"
+  }
+}

@@ -1,0 +1,63 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gmr-smoke-tests
+  namespace: gmr
+  labels:
+    app: gmr-smoke-tests
+spec:
+  schedule: "0 */8 * * *"           # every 8 hours: 00:00, 08:00, 16:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600     # 10 min hard timeout
+      template:
+        metadata:
+          labels:
+            app: gmr-smoke-tests
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: regcred
+          containers:
+            - name: smoke
+              image: contribute.void42.internal/golden/gmr-smoke-tests:latest
+              env:
+                - name: BASE_URL
+                  value: "https://gmr.void42.net"
+                - name: TEST_EMAIL
+                  valueFrom:
+                    secretKeyRef:
+                      name: gmr-smoke-creds
+                      key: email
+                - name: TEST_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: gmr-smoke-creds
+                      key: password
+                - name: KUMA_PUSH_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: gmr-smoke-creds
+                      key: kuma_push_url
+                      optional: true
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "1000m"
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  npx playwright test --project=chromium
+                  # Push success to Uptime Kuma if configured
+                  if [ -n "$KUMA_PUSH_URL" ]; then
+                    curl -fsS -m 10 "$KUMA_PUSH_URL?status=up&msg=13/13+passed" || true
+                  fi
