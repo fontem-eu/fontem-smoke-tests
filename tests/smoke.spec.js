@@ -289,10 +289,10 @@ test.describe.serial('Production Smoke Tests', () => {
         'Include their lobbying spend or number of EP access passes if available.',
     )
 
-    // Must have progressed through search/analysis phases (proof of tool execution)
-    // The proxy sends "searching" phase ~3s in, "analyzing" ~8s in
+    // Must have progressed through tool_use phase (proof of MCP tool execution)
+    // The proxy sends "tool_use" events when Claude invokes MCP tools
     const hadWorkPhases = phases.some(
-      (p) => p === 'searching' || p === 'analyzing' || p === 'synthesizing',
+      (p) => p === 'tool_use' || p === 'searching' || p === 'analyzing' || p === 'synthesizing',
     )
     expect(hadWorkPhases).toBeTruthy()
 
