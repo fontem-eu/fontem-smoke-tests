@@ -42,16 +42,20 @@ async function apiLogin(request, baseURL) {
  *
  * Returns { events: [{type, data}], fullText: string, phases: string[] }
  */
-async function chatStream(page, baseURL, token, message, reportContext) {
+async function chatStream(page, baseURL, token, message, conversationKey, contextBlock) {
   return page.evaluate(
-    async ({ url, token: tk, message: msg, reportContext: ctx }) => {
+    async ({ url, token: tk, message: msg, conversationKey: ck, contextBlock: cb }) => {
       const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${tk}`,
         },
-        body: JSON.stringify({ message: msg, report_context: ctx || '' }),
+        body: JSON.stringify({
+          message: msg,
+          conversation_key: ck,
+          context_block: cb || '',
+        }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
@@ -98,7 +102,8 @@ async function chatStream(page, baseURL, token, message, reportContext) {
       url: `${baseURL}/capi/assist/chat/stream`,
       token,
       message,
-      reportContext,
+      conversationKey,
+      contextBlock,
     },
   )
 }
@@ -233,6 +238,8 @@ test.describe.serial('Production Smoke Tests', () => {
       baseURL,
       authToken,
       'What is Apple Inc\'s ticker symbol?',
+      `smoke:assist-10:${Date.now()}`,
+      '',
     )
 
     // Must have at least one status event before chunks (heartbeat proof)
@@ -264,11 +271,8 @@ test.describe.serial('Production Smoke Tests', () => {
       'Add a new section to this report with the title "Apple Overview" and content ' +
         '"Apple Inc. is a multinational technology company headquartered in Cupertino." ' +
         'Use the propose_edit tool.',
-      JSON.stringify({
-        id: reportId,
-        title: REPORT_TITLE,
-        sections: [{ id: sectionId, content: '<p>Smoke test section</p>' }],
-      }),
+      `report:${reportId}`,
+      `# ${REPORT_TITLE}\n\n## Section 1\nSmoke test section.`,
     )
 
     // The assistant must return a non-empty response that acknowledges the task.
@@ -304,6 +308,8 @@ test.describe.serial('Production Smoke Tests', () => {
       authToken,
       'Search for "Apple" in the GMR graph and report what data we have. ' +
         'Include their lobbying spend or number of EP access passes if available.',
+      `smoke:assist-12:${Date.now()}`,
+      '',
     )
 
     // Must have progressed through tool_use phase (proof of MCP tool execution)

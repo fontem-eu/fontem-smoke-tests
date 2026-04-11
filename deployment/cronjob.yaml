@@ -55,9 +55,21 @@ spec:
                 - /bin/sh
                 - -c
                 - |
-                  set -e
-                  npx playwright test --project=chromium
-                  # Push success to Uptime Kuma if configured
+                  # Don't `set -e` — we need to capture the test exit code
+                  # and always push the result to Kuma.
+                  out=$(npx playwright test --project=chromium 2>&1)
+                  rc=$?
+                  echo "$out"
+
+                  # Parse pass/fail counts from Playwright's summary line
+                  summary=$(echo "$out" | grep -oE '[0-9]+ passed|[0-9]+ failed|[0-9]+ flaky' | tr '\n' ' ' | sed 's/ $//' | tr ' ' '+')
+                  summary=${summary:-unknown}
+
                   if [ -n "$KUMA_PUSH_URL" ]; then
-                    curl -fsS -m 10 "$KUMA_PUSH_URL?status=up&msg=13/13+passed" || true
+                    if [ "$rc" -eq 0 ]; then
+                      curl -fsS -m 10 "$KUMA_PUSH_URL?status=up&msg=$summary&ping=" || true
+                    else
+                      curl -fsS -m 10 "$KUMA_PUSH_URL?status=down&msg=$summary&ping=" || true
+                    fi
                   fi
+                  exit $rc
