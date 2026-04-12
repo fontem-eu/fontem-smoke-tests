@@ -137,6 +137,7 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.fill('[data-testid="login-password"]', TEST_PASSWORD)
     await page.click('[data-testid="login-submit"]')
     await page.waitForURL('/', { timeout: 15_000 })
+    await page.click('[data-testid="profile-menu-trigger"]')
     await expect(page.locator('[data-testid="sign-out-btn"]')).toBeVisible()
   })
 
