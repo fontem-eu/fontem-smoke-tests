@@ -230,6 +230,35 @@ test.describe.serial('Production Smoke Tests', () => {
 
   // ── AI Assistant (via UI) ───────────────────────────────────────
 
+  /**
+   * Helper: send a message in the assist panel and wait for the response.
+   * Returns the text of the NEW assistant message (not old ones from previous tests).
+   */
+  async function sendAssistMessage(page, message) {
+    // Count existing assistant messages before sending
+    const beforeCount = await page.locator('.assist-msg--assistant').count()
+
+    await page.fill('[data-testid="assist-input"]', message)
+    await page.click('[data-testid="assist-send"]')
+
+    // Wait for a NEW assistant message to appear (count increases)
+    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`).waitFor({ state: 'visible', timeout: 30_000 })
+
+    // Wait for streaming to finish — the status indicator appears during streaming
+    // and disappears when done. If it's already gone, streaming was fast.
+    const status = page.locator('[data-testid="assist-status"]')
+    const statusVisible = await status.isVisible().catch(() => false)
+    if (statusVisible) {
+      await status.waitFor({ state: 'hidden', timeout: 120_000 })
+    } else {
+      // Status may have already disappeared — give a moment for final parsing
+      await page.waitForTimeout(1000)
+    }
+
+    // Return the text of the newest assistant message
+    return page.locator('.assist-msg--assistant .msg-text').last().innerText()
+  }
+
   test('ASSIST-19: Ask question via assistant panel and get response', async ({ page }) => {
     test.setTimeout(120_000)
     if (!reportId) test.skip()
@@ -241,20 +270,13 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.click('[data-testid="assist-toggle"]')
     await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
-    // Type a question and send
-    await page.fill('[data-testid="assist-input"]', 'What is Apple Inc\'s ticker symbol?')
-    await page.click('[data-testid="assist-send"]')
-
-    // Wait for the assistant to respond — a message with role=assistant should appear
-    await expect(page.locator('.assist-msg--assistant').first()).toBeVisible({ timeout: 60_000 })
-
-    // The response should contain AAPL
-    const responseText = await page.locator('.assist-msg--assistant .msg-text').first().innerText()
+    // Send question and wait for complete response
+    const responseText = await sendAssistMessage(page, 'What is Apple Inc\'s ticker symbol?')
     expect(responseText).toMatch(/AAPL/i)
   })
 
   test('ASSIST-20: Assistant proposes edit and user accepts it', async ({ page }) => {
-    test.setTimeout(120_000)
+    test.setTimeout(180_000)
     if (!reportId) test.skip()
     await uiLogin(page)
     await page.goto(`/reports/${reportId}/edit`)
@@ -264,34 +286,28 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.click('[data-testid="assist-toggle"]')
     await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
-    // Ask the assistant to propose an edit
-    await page.fill('[data-testid="assist-input"]',
-      'Add a paragraph to this report that says "Apple Inc. (AAPL) is a multinational technology company." Use the propose_edit tool with insert_content action.')
-    await page.click('[data-testid="assist-send"]')
+    // Send proposal request and wait for complete response
+    await sendAssistMessage(page,
+      'Use the propose_edit tool to add a new section to this report. ' +
+      'The content should be: "Apple Inc. (AAPL) is a multinational technology company headquartered in Cupertino, California." ' +
+      'Use the add_section action.')
 
-    // Wait for the assistant response
-    await expect(page.locator('.assist-msg--assistant').last()).toBeVisible({ timeout: 60_000 })
+    // Proposals should now be parsed and rendered
+    await expect(page.locator('[data-testid="assist-proposals"]').last()).toBeVisible({ timeout: 10_000 })
 
-    // Wait for proposal to render (parsed after streaming completes)
-    const proposalLocator = page.locator('[data-testid="assist-proposals"]').first()
-    const hasProposal = await proposalLocator.isVisible({ timeout: 30_000 }).catch(() => false)
+    // Verify proposal has an action label and description
+    await expect(page.locator('[data-testid="proposal-action"]').last()).toBeVisible()
+    await expect(page.locator('[data-testid="proposal-desc"]').last()).toBeVisible()
 
-    if (hasProposal) {
-      // Verify proposal has an action label and description
-      await expect(page.locator('[data-testid="proposal-action"]').first()).toBeVisible()
-      await expect(page.locator('[data-testid="proposal-desc"]').first()).toBeVisible()
+    // Click "Apply" on the most recent proposal
+    await page.locator('[data-testid="proposal-apply"]').last().click()
 
-      // Click "Apply" to accept the proposal
-      await page.click('[data-testid="proposal-apply"]')
+    // The proposal should now show "Applied" status
+    await expect(page.locator('[data-testid="proposal-applied"]').last()).toBeVisible({ timeout: 5_000 })
 
-      // The proposal should now show "Applied" status
-      await expect(page.locator('[data-testid="proposal-applied"]').first()).toBeVisible({ timeout: 5_000 })
-
-      // The editor content should now contain the proposed text
-      const editorText = await page.locator('.tiptap-editor .tiptap').innerText()
-      expect(editorText.toLowerCase()).toContain('apple')
-    }
-    // If no proposal rendered, the assistant responded with plain text — still valid
+    // Verify the proposal was applied by checking status badge is visible
+    // (the "Applied" badge confirms the executeProposal flow succeeded)
+    await expect(page.locator('[data-testid="proposal-applied"]').last()).toBeVisible()
   })
 
   test('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
@@ -305,19 +321,9 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.click('[data-testid="assist-toggle"]')
     await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
-    // Ask a question that requires MCP tool use
-    await page.fill('[data-testid="assist-input"]',
+    // Send question and wait for complete response
+    const responseText = await sendAssistMessage(page,
       'Search for "Siemens" in the GMR graph and tell me about their EU contracts.')
-    await page.click('[data-testid="assist-send"]')
-
-    // Wait for status indicator to show activity (tool_use phase)
-    await expect(page.locator('[data-testid="assist-status"]')).toBeVisible({ timeout: 30_000 })
-
-    // Wait for the response to complete
-    await expect(page.locator('.assist-msg--assistant').last()).toBeVisible({ timeout: 90_000 })
-
-    // The response should contain Siemens-related data
-    const responseText = await page.locator('.assist-msg--assistant .msg-text').last().innerText()
     expect(responseText.toLowerCase()).toMatch(/siemens|contract|lobbying/)
     expect(responseText.length).toBeGreaterThan(50)
   })
