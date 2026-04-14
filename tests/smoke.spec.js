@@ -124,73 +124,45 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 5_000 })
   })
 
-  test('REPORT-11: Add section with widget via markdown', async ({ page }) => {
+  test('REPORT-11: Add content to unified editor', async ({ page }) => {
     if (!reportId) test.skip()
     await uiLogin(page)
     await page.goto(`/reports/${reportId}/edit`)
-    await expect(page.locator('[data-testid="section-0"]')).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
-    // Switch to markdown mode for precise widget insertion
-    await page.click('[data-testid="section-0"] [data-testid="toggle-markdown-btn"]')
-    await expect(page.locator('[data-testid="section-0"] [data-testid="markdown-textarea"]')).toBeVisible({ timeout: 3_000 })
-
-    // Write content with an embedded contracts_table widget
-    const content = [
-      '# Siemens EU Procurement Analysis',
-      '',
-      'This section demonstrates widget embedding in reports.',
-      '',
-      '```widget',
-      '{"widget_type":"contracts_table","schema_version":1,"entityId":"f4259a89-88f7-5796-a22a-1c8c1999cc69"}',
-      '```',
-      '',
-      'The widget above shows Siemens AG procurement data.',
-    ].join('\n')
-    await page.fill('[data-testid="section-0"] [data-testid="markdown-textarea"]', content)
-
-    // Add a second section with a graph_explorer widget
-    await page.click('[data-testid="add-section-btn"]')
-    await expect(page.locator('[data-testid="section-1"]')).toBeVisible({ timeout: 3_000 })
-    await page.click('[data-testid="section-1"] [data-testid="toggle-markdown-btn"]')
-    await page.fill('[data-testid="section-1"] [data-testid="markdown-textarea"]', [
-      '## Corporate Graph',
-      '',
-      '```widget',
-      '{"widget_type":"graph_explorer","schema_version":1,"entityId":"f4259a89-88f7-5796-a22a-1c8c1999cc69"}',
-      '```',
-    ].join('\n'))
+    // Click into the TipTap editor and type content
+    const editor = page.locator('.tiptap-editor .tiptap')
+    await editor.click()
+    await page.keyboard.type('Siemens EU Procurement Analysis')
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('This report covers Siemens AG public procurement contracts.')
 
     // Save
     await page.click('[data-testid="save-report"]')
     await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 5_000 })
   })
 
-  test('REPORT-12: Report view renders sections and title', async ({ page }) => {
+  test('REPORT-12: Report view renders content and title', async ({ page }) => {
     if (!reportId) test.skip()
     await uiLogin(page)
     await page.goto(`/reports/${reportId}`)
     await expect(page.locator('[data-testid="report-title"]')).toContainText('Smoke Report', { timeout: 10_000 })
     await expect(page.locator('[data-testid="report-abstract"]')).toContainText('widget validation')
-    // At least two sections should render
+    // The report body should render (v2 uses read-only TipTap)
     await expect(page.locator('[data-testid="report-section-0"]')).toBeVisible({ timeout: 5_000 })
-    await expect(page.locator('[data-testid="report-section-1"]')).toBeVisible({ timeout: 5_000 })
+    // Content we typed should be present
+    await expect(page.locator('[data-testid="report-section-0"]')).toContainText('Siemens')
   })
 
-  test('REPORT-13: Widgets render in report view', async ({ page }) => {
+  test('REPORT-13: Editor toolbar is visible', async ({ page }) => {
     if (!reportId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}`)
-    await expect(page.locator('[data-testid="report-title"]')).toBeVisible({ timeout: 10_000 })
-
-    // The contracts_table widget should render (may take time to load data)
-    await expect(
-      page.locator('[data-testid="widget-contracts-table"]').first(),
-    ).toBeVisible({ timeout: 15_000 })
-
-    // The graph_explorer widget should render
-    await expect(
-      page.locator('[data-testid="widget-graph-explorer"]').first(),
-    ).toBeVisible({ timeout: 15_000 })
+    await page.goto(`/reports/${reportId}/edit`)
+    // The unified editor toolbar should be visible (no section split)
+    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 10_000 })
+    // The TipTap editor should be present
+    await expect(page.locator('.tiptap-editor .tiptap')).toBeVisible({ timeout: 5_000 })
   })
 
   test('REPORT-14: Reports list page shows the report', async ({ page }) => {
