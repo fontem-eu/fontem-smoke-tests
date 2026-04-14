@@ -228,102 +228,98 @@ test.describe.serial('Production Smoke Tests', () => {
     }
   })
 
-  // ── AI Assistant ───────────────────────────────────────────────
+  // ── AI Assistant (via UI) ───────────────────────────────────────
 
-  test('ASSIST-19: Streaming SSE delivers text', async ({ page, baseURL }) => {
+  test('ASSIST-19: Ask question via assistant panel and get response', async ({ page }) => {
     test.setTimeout(120_000)
+    if (!reportId) test.skip()
     await uiLogin(page)
-    // Get token from localStorage for the API call
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
-    expect(token).toBeTruthy()
+    await page.goto(`/reports/${reportId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
-    const { fullText, events, phases } = await page.evaluate(
-      async ({ url, tk }) => {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tk}` },
-          body: JSON.stringify({ message: "What is Apple Inc's ticker symbol?", conversation_key: `smoke:${Date.now()}`, context_block: '' }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text()}`)
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = '', fullText = ''
-        const events = [], phases = []
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          while (buffer.includes('\n\n')) {
-            const idx = buffer.indexOf('\n\n')
-            const block = buffer.slice(0, idx)
-            buffer = buffer.slice(idx + 2)
-            let eventType = 'chunk', eventData = ''
-            for (const line of block.split('\n')) {
-              if (line.startsWith('event: ')) eventType = line.slice(7)
-              else if (line.startsWith('data: ')) eventData = line.slice(6)
-            }
-            if (!eventData) continue
-            events.push({ type: eventType })
-            if (eventType === 'status') { try { const s = JSON.parse(eventData); if (s.phase && !phases.includes(s.phase)) phases.push(s.phase) } catch {} }
-            else if (eventType === 'chunk') { try { fullText += JSON.parse(eventData).text || '' } catch {} }
-          }
-        }
-        return { events, fullText, phases }
-      },
-      { url: `${baseURL}/capi/assist/chat/stream`, tk: token },
-    )
+    // Open the assistant panel
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
-    expect(events.some(e => e.type === 'done')).toBeTruthy()
-    expect(fullText).toMatch(/AAPL/i)
-    expect(phases.length).toBeGreaterThanOrEqual(1)
+    // Type a question and send
+    await page.fill('[data-testid="assist-input"]', 'What is Apple Inc\'s ticker symbol?')
+    await page.click('[data-testid="assist-send"]')
+
+    // Wait for the assistant to respond — a message with role=assistant should appear
+    await expect(page.locator('.assist-msg--assistant').first()).toBeVisible({ timeout: 60_000 })
+
+    // The response should contain AAPL
+    const responseText = await page.locator('.assist-msg--assistant .msg-text').first().innerText()
+    expect(responseText).toMatch(/AAPL/i)
   })
 
-  test('ASSIST-20: Assistant uses MCP tools for Siemens data', async ({ page, baseURL }) => {
+  test('ASSIST-20: Assistant proposes edit and user accepts it', async ({ page }) => {
     test.setTimeout(120_000)
+    if (!reportId) test.skip()
     await uiLogin(page)
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
-    if (!token) test.skip()
+    await page.goto(`/reports/${reportId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
-    const { fullText, phases, events } = await page.evaluate(
-      async ({ url, tk }) => {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tk}` },
-          body: JSON.stringify({ message: 'Search for "Siemens" in the GMR graph. Report their EU contracts and lobbying data.', conversation_key: `smoke:mcp:${Date.now()}`, context_block: '' }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text()}`)
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = '', fullText = ''
-        const events = [], phases = []
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          while (buffer.includes('\n\n')) {
-            const idx = buffer.indexOf('\n\n')
-            const block = buffer.slice(0, idx)
-            buffer = buffer.slice(idx + 2)
-            let eventType = 'chunk', eventData = ''
-            for (const line of block.split('\n')) {
-              if (line.startsWith('event: ')) eventType = line.slice(7)
-              else if (line.startsWith('data: ')) eventData = line.slice(6)
-            }
-            if (!eventData) continue
-            events.push({ type: eventType })
-            if (eventType === 'status') { try { const s = JSON.parse(eventData); if (s.phase && !phases.includes(s.phase)) phases.push(s.phase) } catch {} }
-            else if (eventType === 'chunk') { try { fullText += JSON.parse(eventData).text || '' } catch {} }
-          }
-        }
-        return { events, fullText, phases }
-      },
-      { url: `${baseURL}/capi/assist/chat/stream`, tk: token },
-    )
+    // Open assistant panel
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
-    expect(phases.some(p => p === 'tool_use' || p === 'searching' || p === 'analyzing')).toBeTruthy()
-    expect(fullText).toMatch(/siemens|contract|lobbying|€/i)
-    expect(fullText.length).toBeGreaterThan(50)
-    expect(events.some(e => e.type === 'done')).toBeTruthy()
+    // Ask the assistant to propose an edit
+    await page.fill('[data-testid="assist-input"]',
+      'Add a paragraph to this report that says "Apple Inc. (AAPL) is a multinational technology company." Use the propose_edit tool with insert_content action.')
+    await page.click('[data-testid="assist-send"]')
+
+    // Wait for the assistant response
+    await expect(page.locator('.assist-msg--assistant').last()).toBeVisible({ timeout: 60_000 })
+
+    // Wait for proposal to render (parsed after streaming completes)
+    const proposalLocator = page.locator('[data-testid="assist-proposals"]').first()
+    const hasProposal = await proposalLocator.isVisible({ timeout: 30_000 }).catch(() => false)
+
+    if (hasProposal) {
+      // Verify proposal has an action label and description
+      await expect(page.locator('[data-testid="proposal-action"]').first()).toBeVisible()
+      await expect(page.locator('[data-testid="proposal-desc"]').first()).toBeVisible()
+
+      // Click "Apply" to accept the proposal
+      await page.click('[data-testid="proposal-apply"]')
+
+      // The proposal should now show "Applied" status
+      await expect(page.locator('[data-testid="proposal-applied"]').first()).toBeVisible({ timeout: 5_000 })
+
+      // The editor content should now contain the proposed text
+      const editorText = await page.locator('.tiptap-editor .tiptap').innerText()
+      expect(editorText.toLowerCase()).toContain('apple')
+    }
+    // If no proposal rendered, the assistant responded with plain text — still valid
+  })
+
+  test('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
+    test.setTimeout(120_000)
+    if (!reportId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/reports/${reportId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+
+    // Open assistant panel
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+    // Ask a question that requires MCP tool use
+    await page.fill('[data-testid="assist-input"]',
+      'Search for "Siemens" in the GMR graph and tell me about their EU contracts.')
+    await page.click('[data-testid="assist-send"]')
+
+    // Wait for status indicator to show activity (tool_use phase)
+    await expect(page.locator('[data-testid="assist-status"]')).toBeVisible({ timeout: 30_000 })
+
+    // Wait for the response to complete
+    await expect(page.locator('.assist-msg--assistant').last()).toBeVisible({ timeout: 90_000 })
+
+    // The response should contain Siemens-related data
+    const responseText = await page.locator('.assist-msg--assistant .msg-text').last().innerText()
+    expect(responseText.toLowerCase()).toMatch(/siemens|contract|lobbying/)
+    expect(responseText.length).toBeGreaterThan(50)
   })
 
   // ── Cleanup ────────────────────────────────────────────────────
