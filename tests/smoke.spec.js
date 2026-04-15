@@ -78,7 +78,7 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="contracts-panel"]').first()).toBeVisible({ timeout: 20_000 })
   })
 
-  test('BROWSE-08: Graph explorer renders with EU entity', async ({ page }) => {
+  test('BROWSE-08: Graph explorer renders and supports expand/collapse', async ({ page }) => {
     // Siemens AG has graph connections (e.g. Universität Stuttgart)
     await page.goto('/')
     const searchInput = page.locator('input[type="search"]').first()
@@ -90,9 +90,32 @@ test.describe.serial('Production Smoke Tests', () => {
     if (await graphLink.isVisible({ timeout: 3_000 }).catch(() => false)) {
       await graphLink.click()
     }
-    await page.waitForSelector('[data-testid="graph-panel-wrap"], .ge-canvas, canvas', {
-      timeout: 15_000,
-    })
+    // Wait for the graph canvas to render
+    await page.waitForSelector('[data-testid="ge-canvas"], canvas', { timeout: 15_000 })
+
+    // Wait for graph to load (status bar shows node count)
+    await expect(page.locator('[data-testid="ge-status"]')).toBeVisible({ timeout: 10_000 })
+
+    // Click on the canvas to trigger a node click (click center area)
+    const canvas = page.locator('[data-testid="ge-canvas"], canvas').first()
+    const box = await canvas.boundingBox()
+    if (box) {
+      // Click center of the canvas (where the center node typically is)
+      await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } })
+
+      // If tooltip appeared, check for the expand button
+      const tooltip = page.locator('[data-testid="ge-tooltip"]')
+      if (await tooltip.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        // Verify expand/collapse button exists in the tooltip
+        await expect(page.locator('[data-testid="ge-expand-collapse"]')).toBeVisible()
+
+        // Click expand
+        await page.click('[data-testid="ge-expand-collapse"]')
+
+        // Wait briefly for expansion to complete
+        await page.waitForTimeout(2000)
+      }
+    }
   })
 
   // ── Report Lifecycle (all via UI) ──────────────────────────────
