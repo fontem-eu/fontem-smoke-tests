@@ -22,7 +22,7 @@ jobs:
         run: |
           TAG="v$(git rev-parse --short HEAD)"
           IMAGE="gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-smoke-tests"
-          docker build -t $IMAGE:$TAG .
+          docker build --network host -t $IMAGE:$TAG .
           docker push $IMAGE:$TAG
           echo "$COSIGN_KEY" > /tmp/cosign.key
           cosign sign --key /tmp/cosign.key --yes --allow-http-registry $IMAGE:$TAG
