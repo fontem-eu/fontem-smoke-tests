@@ -1,0 +1,30 @@
+name: Build and sign smoke tests image
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Docker CLI + Cosign
+        run: |
+          curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz | tar xz --strip-components=1 -C /usr/local/bin docker/docker
+          curl -sL https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 -o /usr/local/bin/cosign
+          chmod +x /usr/local/bin/cosign
+      - name: Login to registry
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login gitea-http.dev-tools.svc.cluster.local:3000 -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+      - name: Build, push, sign gmr-smoke-tests
+        env:
+          COSIGN_PASSWORD: ""
+          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
+        run: |
+          TAG="v$(git rev-parse --short HEAD)"
+          IMAGE="gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-smoke-tests"
+          docker build -t $IMAGE:$TAG .
+          docker push $IMAGE:$TAG
+          echo "$COSIGN_KEY" > /tmp/cosign.key
+          cosign sign --key /tmp/cosign.key --yes --allow-http-registry $IMAGE:$TAG
+          rm /tmp/cosign.key
+          echo "Built, pushed, and signed $IMAGE:$TAG"
