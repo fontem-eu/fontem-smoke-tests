@@ -1,9 +1,11 @@
 ---
-# Smoke tests against STAGING (gmr-staging.void42.internal) — gate for prod promotion
+# Smoke tests against STAGING (gmr-staging.void42.internal).
 #
-# Runs hourly for background monitoring, AND gets triggered synchronously by
-# gitops/.gitea/workflows/promote.yml before every prod promotion. Failures
-# here block prod promotion.
+# The schedule is SUSPENDED — staging only runs smoke tests as a pre-promotion
+# gate, not on a periodic cadence (periodic smoke monitoring lives in prod).
+# The CronJob exists purely as a template for the gitops promote workflow,
+# which invokes it via `kubectl create job --from=cronjob/gmr-smoke-tests-staging`
+# before every prod promotion. Failures here block prod promotion.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -14,6 +16,7 @@ metadata:
     environment: staging
 spec:
   schedule: "0 * * * *"
+  suspend: true
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
