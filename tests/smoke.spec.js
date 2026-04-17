@@ -208,10 +208,13 @@ test.describe.serial('Production Smoke Tests', () => {
     if (!reportId) test.skip()
     await uiLogin(page)
     await page.goto(`/reports/${reportId}/edit`)
-    // The unified editor toolbar should be visible (no section split)
-    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 10_000 })
-    // The TipTap editor should be present
-    await expect(page.locator('.tiptap-editor .tiptap')).toBeVisible({ timeout: 5_000 })
+    // Both `editor-toolbar` and `.tiptap-editor .tiptap` only render once the
+    // TipTap editor instance finishes initializing (the template wraps them
+    // in `v-if="editor"`). Cold-start init can take well over 10s under
+    // cluster CPU pressure — bump the timeouts to tolerate it. This test
+    // is a visibility check, not a perf check.
+    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('.tiptap-editor .tiptap')).toBeVisible({ timeout: 10_000 })
   })
 
   test('REPORT-14: Reports list page shows the report', async ({ page }) => {
