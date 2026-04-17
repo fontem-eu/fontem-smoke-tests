@@ -28,3 +28,5 @@ jobs:
           cosign sign --key /tmp/cosign.key --yes --allow-http-registry $IMAGE:$TAG
           rm /tmp/cosign.key
           echo "Built, pushed, and signed $IMAGE:$TAG"
+
+# retrigger 1776440393
