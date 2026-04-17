@@ -8,6 +8,10 @@ export default defineConfig({
   workers: 1,
   retries: 1,
   timeout: 60_000,
+  // One API login at suite start, saved as storageState, reused by every
+  // test. Avoids hitting the /auth/login 5/min rate limit when many tests
+  // each do a UI login. See global-setup.js for details.
+  globalSetup: './global-setup.js',
   reporter: [
     ['list'],
     ['junit', { outputFile: 'test-results/results.xml' }],
@@ -15,6 +19,7 @@ export default defineConfig({
   ],
   use: {
     baseURL: BASE_URL,
+    storageState: './auth.json',
     // Internal envs serve TLS signed by the void42 private CA (via Vault PKI).
     // Chromium doesn't trust it by default, so ignore cert errors only when
     // targeting *.void42.internal. Prod (gmr.void42.net) keeps full cert

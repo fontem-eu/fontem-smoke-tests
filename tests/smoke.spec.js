@@ -14,13 +14,34 @@ const TEST_PASSWORD = process.env.TEST_PASSWORD || 'TestPass123!'
 const RUN_ID = Date.now()
 const REPORT_TITLE = `Smoke Report ${RUN_ID}`
 
-/** Login via UI — reused by multiple tests */
+/**
+ * Ensure the browser is in a logged-in state. Every test inherits the
+ * session via Playwright's `storageState` (populated once by
+ * global-setup.js's API login). This helper just navigates to `/` to
+ * give the page context a real origin and verifies the token is there;
+ * if it's not, it falls back to a full UI login (self-heal).
+ *
+ * This is the shape that keeps /auth/login rate-limit pressure at 0-3
+ * hits per suite run instead of 1 hit per test.
+ */
 async function uiLogin(page) {
+  await page.goto('/')
+  const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+  if (token) return
+  // Fallback: storageState missing or expired — do a real UI login.
   await page.goto('/login')
   await page.fill('[data-testid="login-email"]', TEST_EMAIL)
   await page.fill('[data-testid="login-password"]', TEST_PASSWORD)
   await page.click('[data-testid="login-submit"]')
   await page.waitForURL('/', { timeout: 15_000 })
+}
+
+/** Clear the preloaded session so a test can exercise the unauthenticated flow. */
+async function clearSession(page) {
+  await page.goto('/login')
+  await page.evaluate(() => localStorage.clear())
+  await page.context().clearCookies()
+  await page.reload()
 }
 
 test.describe.serial('Production Smoke Tests', () => {
@@ -29,14 +50,19 @@ test.describe.serial('Production Smoke Tests', () => {
   // ── Authentication ─────────────────────────────────────────────
 
   test('AUTH-01: Login page loads with form', async ({ page }) => {
-    await page.goto('/login')
+    await clearSession(page)
     await expect(page.locator('[data-testid="login-email"]')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('[data-testid="login-password"]')).toBeVisible()
     await expect(page.locator('[data-testid="login-submit"]')).toBeVisible()
   })
 
   test('AUTH-02: Login with test credentials', async ({ page }) => {
-    await uiLogin(page)
+    // Exercise the real login flow (clear the preloaded session first).
+    await clearSession(page)
+    await page.fill('[data-testid="login-email"]', TEST_EMAIL)
+    await page.fill('[data-testid="login-password"]', TEST_PASSWORD)
+    await page.click('[data-testid="login-submit"]')
+    await page.waitForURL('/', { timeout: 15_000 })
     await expect(page.locator('[data-testid="app-nav"]')).toBeVisible({ timeout: 5_000 })
   })
 
