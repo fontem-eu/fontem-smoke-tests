@@ -309,6 +309,7 @@ test.describe.serial('Production Smoke Tests', () => {
   }
 
   test('ASSIST-19: Ask question via assistant panel and get response', async ({ page }) => {
+    test.skip(true, 'AI assistant is being redesigned — disabled until new direction lands')
     test.setTimeout(120_000)
     if (!reportId) test.skip()
     await uiLogin(page)
@@ -325,6 +326,7 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('ASSIST-20: Assistant proposes edit and user accepts it', async ({ page }) => {
+    test.skip(true, 'AI assistant is being redesigned — disabled until new direction lands')
     test.setTimeout(180_000)
     if (!reportId) test.skip()
     await uiLogin(page)
@@ -360,6 +362,7 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
+    test.skip(true, 'AI assistant is being redesigned — disabled until new direction lands')
     test.setTimeout(120_000)
     if (!reportId) test.skip()
     await uiLogin(page)
