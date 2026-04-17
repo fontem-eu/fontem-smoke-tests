@@ -15,6 +15,11 @@ export default defineConfig({
   ],
   use: {
     baseURL: BASE_URL,
+    // Internal envs serve TLS signed by the void42 private CA (via Vault PKI).
+    // Chromium doesn't trust it by default, so ignore cert errors only when
+    // targeting *.void42.internal. Prod (gmr.void42.net) keeps full cert
+    // validation against the public chain.
+    ignoreHTTPSErrors: /\.void42\.internal(\/|$|:)/.test(BASE_URL),
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
