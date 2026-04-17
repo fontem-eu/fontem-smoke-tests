@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY playwright.config.js eslint.config.js ./
+COPY playwright.config.js eslint.config.js global-setup.js ./
 COPY tests/ tests/
 COPY docs/ docs/
 
