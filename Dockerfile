@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright:v1.52.0-noble
+FROM mcr.microsoft.com/playwright:v1.59.1-noble
 
 WORKDIR /app
 
@@ -9,8 +9,8 @@ COPY playwright.config.js eslint.config.js ./
 COPY tests/ tests/
 COPY docs/ docs/
 
-# Install only chromium (all we need for smoke tests)
-RUN npx playwright install chromium
+# Chromium is already present in the base image — matches the pinned
+# @playwright/test version so no runtime download is attempted.
 
 # Default target
 ENV BASE_URL=https://gmr.void42.net
