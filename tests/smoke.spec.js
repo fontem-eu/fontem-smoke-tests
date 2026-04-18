@@ -383,8 +383,9 @@ test.describe.serial('Production Smoke Tests', () => {
     return page.locator('.assist-msg--assistant .msg-text').last().innerText()
   }
 
-  test('ASSIST-19: Ask question via assistant panel and get response', async ({ page }) => {
-    test.skip(true, 'AI assistant is being redesigned — disabled until new direction lands')
+  // AI assistant tests are disabled while the assistant is being redesigned.
+  // Re-enable by removing the `.skip` once the new assistant direction lands.
+  test.skip('ASSIST-19: Ask question via assistant panel and get response', async ({ page }) => {
     test.setTimeout(120_000)
     if (!reportId) test.skip()
     await uiLogin(page)
@@ -400,8 +401,7 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(responseText).toMatch(/AAPL/i)
   })
 
-  test('ASSIST-20: Assistant proposes edit and user accepts it', async ({ page }) => {
-    test.skip(true, 'AI assistant is being redesigned — disabled until new direction lands')
+  test.skip('ASSIST-20: Assistant proposes edit and user accepts it', async ({ page }) => {
     test.setTimeout(180_000)
     if (!reportId) test.skip()
     await uiLogin(page)
@@ -436,8 +436,7 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="proposal-applied"]').last()).toBeVisible()
   })
 
-  test('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
-    test.skip(true, 'AI assistant is being redesigned — disabled until new direction lands')
+  test.skip('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
     test.setTimeout(120_000)
     if (!reportId) test.skip()
     await uiLogin(page)

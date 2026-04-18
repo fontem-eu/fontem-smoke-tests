@@ -46,7 +46,19 @@ spec:
               command: ["/bin/sh", "-c"]
               args:
                 - |
+                  # Default to "down" — if the pod dies for any reason
+                  # (SIGKILL at activeDeadlineSeconds, OOM, node eviction)
+                  # the trap pushes a down signal before exit. Overwritten
+                  # to "up" only after a clean rc=0.
+                  KUMA_STATUS=down
+                  KUMA_SUMMARY=unknown
+                  push_kuma() {
+                    [ -z "$KUMA_PUSH_URL" ] && return 0
+                    curl -fsS -m 10 "$KUMA_PUSH_URL?status=$KUMA_STATUS&msg=$KUMA_SUMMARY&ping=" || true
+                  }
+                  trap push_kuma EXIT
                   out=$(npx playwright test --project=chromium 2>&1); rc=$?; echo "$out"
-                  summary=$(echo "$out" | grep -oE '[0-9]+ passed|[0-9]+ failed|[0-9]+ flaky' | tr '\n' ' ' | sed 's/ $//' | tr ' ' '+')
-                  [ -n "$KUMA_PUSH_URL" ] && { [ "$rc" -eq 0 ] && curl -fsS -m 10 "$KUMA_PUSH_URL?status=up&msg=${summary:-unknown}&ping=" || curl -fsS -m 10 "$KUMA_PUSH_URL?status=down&msg=${summary:-unknown}&ping="; } || true
+                  KUMA_SUMMARY=$(echo "$out" | grep -oE '[0-9]+ passed|[0-9]+ failed|[0-9]+ flaky' | tr '\n' ' ' | sed 's/ $//' | tr ' ' '+')
+                  KUMA_SUMMARY=${KUMA_SUMMARY:-unknown}
+                  [ "$rc" -eq 0 ] && KUMA_STATUS=up
                   exit $rc
