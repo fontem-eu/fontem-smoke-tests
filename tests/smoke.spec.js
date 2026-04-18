@@ -145,7 +145,16 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('BROWSE-09: Entity business map renders NUTS choropleth for Siemens AG', async ({ page }) => {
-    // Siemens AG has procurement contracts across many EU NUTS regions at all levels
+    // Siemens AG has procurement contracts across many EU NUTS regions at all levels.
+    // We intercept the aggregate API response to confirm regions are actually returned
+    // with non-zero values — proving the choropleth has data to colour.
+    let aggregateResponse = null
+    page.on('response', async (resp) => {
+      if (resp.url().includes('/geo/entity/') && resp.url().includes('/aggregate')) {
+        try { aggregateResponse = await resp.json() } catch { /* ignore */ }
+      }
+    })
+
     await page.goto('/')
     const searchInput = page.locator('input[type="search"]').first()
     await searchInput.fill('Siemens AG')
@@ -165,8 +174,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // Level selector should have options 0-3
     const levelSel = page.locator('[data-testid="enu-level"]')
     await expect(levelSel).toBeVisible()
-    const levelOpts = await levelSel.locator('option').count()
-    expect(levelOpts).toBe(4)
+    expect(await levelSel.locator('option').count()).toBe(4)
 
     // Loading indicator disappears once regions are fetched from the API
     await expect(page.locator('[data-testid="enu-loading"]')).not.toBeVisible({ timeout: 30_000 })
@@ -181,6 +189,31 @@ test.describe.serial('Production Smoke Tests', () => {
 
     // PocketButton must be present (widget interface)
     await expect(page.locator('[data-testid="pocket-save-btn"]')).toBeVisible()
+
+    // ── Verify the API returned highlighted regions ───────────────────────────
+    // This is the key assertion: the backend must have returned ≥1 NUTS regions
+    // with a non-zero contract count, proving the choropleth is actually coloured.
+    expect(
+      aggregateResponse,
+      'Aggregate API was never called — map did not make a fetch request',
+    ).not.toBeNull()
+    const regions = aggregateResponse?.regions ?? []
+    expect(
+      regions.length,
+      `Expected highlighted NUTS regions but got 0 (empty choropleth) — ` +
+      `check that the geo API returns data for this entity`,
+    ).toBeGreaterThan(0)
+    const nonZeroRegions = regions.filter((r) => (r.value ?? 0) > 0)
+    expect(
+      nonZeroRegions.length,
+      `${regions.length} regions returned but all have value=0 — choropleth would be blank`,
+    ).toBeGreaterThan(0)
+
+    // Screenshot saved to test-results/ — visual evidence that regions are highlighted
+    await page.screenshot({
+      path: 'test-results/BROWSE-09-nuts-map.png',
+      fullPage: false,
+    })
   })
 
   // ── Report Lifecycle (all via UI) ──────────────────────────────
