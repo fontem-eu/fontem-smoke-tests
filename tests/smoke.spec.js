@@ -118,6 +118,45 @@ test.describe.serial('Production Smoke Tests', () => {
     }
   })
 
+  test('BROWSE-09: Entity business map renders NUTS choropleth for Siemens AG', async ({ page }) => {
+    // Siemens AG has procurement contracts across many EU NUTS regions at all levels
+    await page.goto('/')
+    const searchInput = page.locator('input[type="search"]').first()
+    await searchInput.fill('Siemens AG')
+    await expect(page.locator('.gmr-card').first()).toBeVisible({ timeout: 10_000 })
+    await page.locator('.gmr-card').first().click()
+    await page.waitForTimeout(800)
+
+    // Click the "Business Map" view tab (Procurement group)
+    const mapTab = page.locator('[data-testid="view-opt-entity-nuts-map"]').first()
+    await expect(mapTab).toBeVisible({ timeout: 10_000 })
+    await mapTab.click()
+
+    // The map container and controls must be visible
+    await expect(page.locator('[data-testid="entity-nuts-map"]')).toBeVisible({ timeout: 20_000 })
+    await expect(page.locator('[data-testid="enu-controls"]')).toBeVisible()
+
+    // Level selector should have options 0-3
+    const levelSel = page.locator('[data-testid="enu-level"]')
+    await expect(levelSel).toBeVisible()
+    const levelOpts = await levelSel.locator('option').count()
+    expect(levelOpts).toBe(4)
+
+    // Loading indicator disappears once regions are fetched from the API
+    await expect(page.locator('[data-testid="enu-loading"]')).not.toBeVisible({ timeout: 30_000 })
+
+    // No API error should appear
+    await expect(page.locator('[data-testid="enu-error"]')).not.toBeVisible()
+
+    // Map canvas must be present (MapLibre injects a <canvas> into enu-map)
+    const mapDiv = page.locator('[data-testid="enu-map"]')
+    await expect(mapDiv).toBeVisible()
+    await expect(mapDiv.locator('canvas')).toBeVisible({ timeout: 15_000 })
+
+    // PocketButton must be present (widget interface)
+    await expect(page.locator('[data-testid="pocket-save-btn"]')).toBeVisible()
+  })
+
   // ── Report Lifecycle (all via UI) ──────────────────────────────
 
   test('REPORT-09: Create report via UI', async ({ page }) => {
