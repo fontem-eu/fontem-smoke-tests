@@ -150,7 +150,8 @@ test.describe.serial('Production Smoke Tests', () => {
     // with non-zero values — proving the choropleth has data to colour.
     let aggregateResponse = null
     page.on('response', async (resp) => {
-      if (resp.url().includes('/geo/entity/') && resp.url().includes('/aggregate')) {
+      const u = resp.url()
+      if (u.includes('/geo/entity/') && u.includes('/aggregate')) {
         try { aggregateResponse = await resp.json() } catch { /* ignore */ }
       }
     })
@@ -161,6 +162,11 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('.gmr-card').first()).toBeVisible({ timeout: 10_000 })
     await page.locator('.gmr-card').first().click()
     await page.waitForTimeout(800)
+
+    // Expand the Procurement group to reveal its sub-views
+    const procCat = page.locator('[data-testid="view-cat-procurement"]').first()
+    await expect(procCat).toBeVisible({ timeout: 10_000 })
+    await procCat.click()
 
     // Click the "Business Map" view tab (Procurement group)
     const mapTab = page.locator('[data-testid="view-opt-entity-nuts-map"]').first()
@@ -209,7 +215,19 @@ test.describe.serial('Production Smoke Tests', () => {
       `${regions.length} regions returned but all have value=0 — choropleth would be blank`,
     ).toBeGreaterThan(0)
 
-    // Screenshot saved to test-results/ — visual evidence that regions are highlighted
+    // ── Canvas non-blank check ────────────────────────────────────────────────
+    // Playwright takes a real composited screenshot (captures WebGL output correctly).
+    // A rendered choropleth has varied pixel colours; a blank canvas PNG is tiny
+    // because a uniform solid colour compresses down to almost nothing.
+    const mapCanvas = mapDiv.locator('canvas')
+    const canvasShot = await mapCanvas.screenshot()
+    expect(
+      canvasShot.length,
+      `Canvas screenshot is suspiciously small (${canvasShot.length} bytes) — ` +
+      `map may be rendering blank; a coloured choropleth produces a larger PNG`,
+    ).toBeGreaterThan(10_000)
+
+    // Full-page screenshot saved to test-results/ — visual evidence
     await page.screenshot({
       path: 'test-results/BROWSE-09-nuts-map.png',
       fullPage: false,
