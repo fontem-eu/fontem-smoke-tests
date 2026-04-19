@@ -11,9 +11,20 @@
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Resolve SCRIPT_DIR *before* any `cd` later in the script. We used to
+# compute this lazily at the upload step, by which point we had already
+# cd'd into the smoke-tests repo root, so `dirname "$0"` pointed at the
+# repo root instead of ./dast — the upload script couldn't be found
+# and the report never made it to BookStack.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 NAMESPACE="gmr-dast"
-TARGET_URL="http://gmr-web.${NAMESPACE}.svc.cluster.local"
-TARGET_CAPI="http://gmr-community-api.${NAMESPACE}.svc.cluster.local:8001"
+# Use the external ingress (HTTPS) as the traffic source for the DAST
+# scan — exactly what real users hit. The smoke tests' playwright
+# config already skips cert validation for *.void42.internal (private
+# PKI), so self-signed internal certs aren't a blocker.
+TARGET_URL="https://gmr-dast.void42.internal"
+TARGET_CAPI="https://gmr-dast.void42.internal/capi"
 ZAP_SERVICE="zap.${NAMESPACE}.svc.cluster.local:8080"
 BOOKSTACK_URL="http://bookstack.bookstack.svc.cluster.local"
 RUN_ID="run_$(date -u +%Y%m%d_%H%M)"
@@ -74,17 +85,28 @@ while true; do
 done
 log "Spider complete"
 
+# ── Phase 2.5: Make sure the test user exists in the dast DB ──
+# Registration is idempotent enough for our purposes — the API returns
+# a 409/400 if the user already exists, we throw the response away.
+# Without this, global-setup.js fails to log in and the passive scan
+# has nothing to record.
+log "Ensuring test user is registered in dast..."
+curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
+    -H "Content-Type: application/json" \
+    -d '{"email":"researcher@gmr.test","password":"TestPass123!","name":"Test User"}' \
+    >/dev/null 2>&1 || true
+
 # ── Phase 3: Passive scan — e2e + smoke tests through ZAP ──
 log "Running e2e tests through ZAP proxy (passive scan)..."
 cd "$WEB_REPO"
-BASE_URL="http://gmr-dast.void42.internal" \
+BASE_URL="https://gmr-dast.void42.internal" \
     npx playwright test --project=chromium \
     --config=playwright.config.js \
     --grep-invert "ASSIST" 2>&1 | tail -5 || true
 
 log "Running smoke tests through ZAP proxy (passive scan)..."
 cd "$SMOKE_REPO"
-BASE_URL="http://gmr-dast.void42.internal" \
+BASE_URL="https://gmr-dast.void42.internal" \
     npx playwright test --project=chromium \
     --grep-invert "ASSIST" 2>&1 | tail -5 || true
 
@@ -126,7 +148,6 @@ curl -sf "http://${ZAP_SERVICE}/OTHER/core/other/htmlreport/" -o "$REPORT_FILE"
 
 # ── Phase 6: Upload to BookStack ─────────────────────────────
 log "Uploading report to BookStack..."
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BOOKSTACK_URL="$BOOKSTACK_URL" \
 BOOKSTACK_TOKEN_ID="$BOOKSTACK_TOKEN_ID" \
 BOOKSTACK_TOKEN_SECRET="$BOOKSTACK_TOKEN_SECRET" \
