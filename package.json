@@ -10,7 +10,7 @@
     "lint": "eslint tests/"
   },
   "devDependencies": {
-    "@playwright/test": "1.52.0",
+    "@playwright/test": "1.59.1",
     "eslint": "^9.26.0"
   }
 }
