@@ -238,7 +238,7 @@ test.describe.serial('Production Smoke Tests', () => {
 
   test('REPORT-09: Create report via UI', async ({ page }) => {
     await uiLogin(page)
-    await page.goto('/reports')
+    await page.goto('/my-reports')
     await page.click('[data-testid="new-report-btn"]')
     // Should navigate to /reports/<id>/edit
     await page.waitForURL(/\/reports\/.*\/edit/, { timeout: 10_000 })
@@ -307,10 +307,11 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('.tiptap-editor .tiptap')).toBeVisible({ timeout: 10_000 })
   })
 
-  test('REPORT-14: Reports list page shows the report', async ({ page }) => {
+  test('REPORT-14: My Reports page shows the report', async ({ page }) => {
     await uiLogin(page)
-    await page.goto('/reports')
-    await expect(page.locator('[data-testid="report-list"]')).toBeVisible({ timeout: 10_000 })
+    // /reports redirects to /my-reports since the nav restructure
+    await page.goto('/my-reports')
+    await expect(page.locator('[data-testid="my-reports"]')).toBeVisible({ timeout: 10_000 })
     // Our smoke test report should be in the list
     await expect(page.locator(`text=${REPORT_TITLE}`).first()).toBeVisible({ timeout: 5_000 })
   })
