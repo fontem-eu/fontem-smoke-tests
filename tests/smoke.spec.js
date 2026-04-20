@@ -402,9 +402,10 @@ test.describe.serial('Production Smoke Tests', () => {
     return page.locator('.assist-msg--assistant .msg-text').last().innerText()
   }
 
-  // AI assistant tests are disabled while the assistant is being redesigned.
-  // Re-enable by removing the `.skip` once the new assistant direction lands.
-  test.skip('ASSIST-19: Ask question via assistant panel and get response', async ({ page }) => {
+  // AI assistant: re-enabled after migration from Claude CLI/OAuth proxy to
+  // Mistral (mistral-small-latest) in gmr-community-api. The SSE event shape
+  // is unchanged, so these three tests exercise the same UI surface.
+  test('ASSIST-19: Ask question via assistant panel and get response', async ({ page }) => {
     test.setTimeout(120_000)
     if (!reportId) test.skip()
     await uiLogin(page)
@@ -420,7 +421,7 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(responseText).toMatch(/AAPL/i)
   })
 
-  test.skip('ASSIST-20: Assistant proposes edit and user accepts it', async ({ page }) => {
+  test('ASSIST-20: Assistant proposes edit and user accepts it', async ({ page }) => {
     test.setTimeout(180_000)
     if (!reportId) test.skip()
     await uiLogin(page)
@@ -455,7 +456,7 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="proposal-applied"]').last()).toBeVisible()
   })
 
-  test.skip('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
+  test('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
     test.setTimeout(120_000)
     if (!reportId) test.skip()
     await uiLogin(page)
