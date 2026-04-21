@@ -2,9 +2,45 @@ name: Build and sign smoke tests image
 on:
   push:
     branches: [main]
+  pull_request:
 
 jobs:
+  # Pre-build supply-chain gate; see gmr-ci/actions/osv-scan.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: golden/gmr-ci
+          path: .gmr-ci
+          token: ${{ secrets.GMR_CI_READ_TOKEN }}
+      - name: OSV-Scanner lockfile gate
+        uses: ./.gmr-ci/actions/osv-scan
+
+  # First SBOM for this repo — previously no Dependency-Track project.
+  analyze:
+    needs: security
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: golden/gmr-ci
+          path: .gmr-ci
+          token: ${{ secrets.GMR_CI_READ_TOKEN }}
+      - name: Generate + upload SBOM
+        uses: ./.gmr-ci/actions/sbom-generate
+        with:
+          language: node
+          project-name: gmr-smoke-tests
+          project-version: ${{ github.sha }}
+          dtrack-key: ${{ secrets.DTRACK_API_KEY }}
+
   build-sign:
+    needs: security
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,5 +64,3 @@ jobs:
           cosign sign --key /tmp/cosign.key --yes --allow-http-registry $IMAGE:$TAG
           rm /tmp/cosign.key
           echo "Built, pushed, and signed $IMAGE:$TAG"
-
-# retrigger 1776440393
