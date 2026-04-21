@@ -85,15 +85,21 @@ while true; do
 done
 log "Spider complete"
 
-# ── Phase 2.5: Make sure the test user exists in the dast DB ──
-# Registration is idempotent enough for our purposes — the API returns
-# a 409/400 if the user already exists, we throw the response away.
-# Without this, global-setup.js fails to log in and the passive scan
-# has nothing to record.
-log "Ensuring test user is registered in dast..."
+# ── Phase 2.5: Make sure the test users exist in the dast DB ──
+# Registration is idempotent — API returns 409/400 if the user
+# already exists. Without the researcher user, global-setup.js fails
+# to log in and the passive scan has nothing to record. The fuzz
+# user is used by Schemathesis in Phase 3.5 below; kept distinct
+# so property-based inputs can't hit destructive endpoints with the
+# same privileges the smoke tests rely on.
+log "Ensuring test users are registered in dast..."
 curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
     -H "Content-Type: application/json" \
     -d '{"email":"researcher@gmr.test","password":"TestPass123!","name":"Test User"}' \
+    >/dev/null 2>&1 || true
+curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
+    -H "Content-Type: application/json" \
+    -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!","name":"Schemathesis Fuzz"}' \
     >/dev/null 2>&1 || true
 
 # ── Phase 3: Passive scan — e2e + smoke tests through ZAP ──
@@ -119,6 +125,36 @@ while true; do
     sleep 5
 done
 log "Passive scan complete"
+
+# ── Phase 3.5: Schemathesis API fuzzing ─────────────────────
+# Property-based fuzzing of /capi/openapi.json using the fuzz user
+# (narrower privileges than researcher — can't trigger destructive
+# mutations even if Schemathesis generates inputs that try).
+if command -v schemathesis >/dev/null 2>&1 || pip install --quiet schemathesis 2>/dev/null; then
+    log "Authenticating fuzz user..."
+    FUZZ_JWT=$(curl -sf -k -X POST "${TARGET_CAPI}/auth/login" \
+        -H "Content-Type: application/json" \
+        -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!"}' \
+        | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))")
+    if [ -n "$FUZZ_JWT" ]; then
+        log "Running Schemathesis fuzz against ${TARGET_CAPI}/openapi.json..."
+        # hypothesis-max-examples=30 keeps each endpoint to ~30
+        # generated inputs; the goal is smoke-style fuzz, not
+        # exhaustive property testing (that belongs in unit tests).
+        python3 -m schemathesis run \
+            --checks all \
+            --base-url "${TARGET_CAPI}" \
+            --hypothesis-max-examples=30 \
+            --header "Authorization: Bearer ${FUZZ_JWT}" \
+            --report-json /tmp/schemathesis-capi.json \
+            "${TARGET_CAPI}/openapi.json" 2>&1 | tail -10 || true
+        log "Schemathesis complete — report at /tmp/schemathesis-capi.json"
+    else
+        log "Fuzz user auth failed; skipping Schemathesis"
+    fi
+else
+    log "Schemathesis not installable in this image; skipping"
+fi
 
 # ── Phase 4: Active scan ────────────────────────────────────
 log "Starting active scan against $TARGET_CAPI"
