@@ -1,0 +1,14 @@
+# Known findings quarantined so gitleaks catches NEW leaks without
+# blocking merges until each is rotated. Delete each line as the
+# corresponding secret is moved to Vault.
+
+# ── BookStack API token embedded in the ZAP DAST CronJob manifest.
+# MUST rotate: token_id + token_secret are plaintext in the YAML.
+# Rotation plan: generate new BookStack API token, store in Vault,
+# switch the CronJob to consume via VaultStaticSecret.
+dast/zap-cronjob.yaml:generic-api-key:16
+dast/zap-cronjob.yaml:generic-api-key:17
+
+# ── auth.json is a per-run JWT written by global-setup.js; local-only
+# artifact, now gitignored. Listed here in case a stale copy lingers.
+auth.json:jwt:9

@@ -17,6 +17,8 @@ jobs:
           token: ${{ secrets.GMR_CI_READ_TOKEN }}
       - name: OSV-Scanner lockfile gate
         uses: ./.gmr-ci/actions/osv-scan
+      - name: Secret scan (gitleaks)
+        uses: ./.gmr-ci/actions/secret-scan
 
   # Build → sign → attest SBOM. SBOM generation happens inline here
   # (replaces the separate `analyze` job) so the same file is both
@@ -55,7 +57,7 @@ jobs:
         name: Build, push, sign, attest
         uses: ./.gmr-ci/actions/docker-build-sign
         with:
-          image: gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-smoke-tests
+          image: contribute.void42.internal/golden/gmr-smoke-tests
           cosign-key: ${{ secrets.COSIGN_KEY }}
           registry-user: ${{ secrets.REGISTRY_USER }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
