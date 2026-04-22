@@ -57,7 +57,14 @@ jobs:
         name: Build, push, sign, attest
         uses: ./.gmr-ci/actions/docker-build-sign
         with:
-          image: contribute.void42.internal/golden/gmr-smoke-tests
+          # Push via the cluster-internal Gitea URL over plaintext HTTP —
+          # the same backend that contribute.void42.internal fronts.
+          # Signatures are path-keyed in the repo, so Kyverno finds them
+          # when deployments reference the image by its HTTPS hostname.
+          # PR #39 briefly flipped this to contribute.void42.internal but
+          # the DinD daemon's containerd pull path doesn't trust the
+          # void42 private CA (Docker 29+ bypasses /etc/docker/certs.d).
+          image: gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-smoke-tests
           cosign-key: ${{ secrets.COSIGN_KEY }}
           registry-user: ${{ secrets.REGISTRY_USER }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
