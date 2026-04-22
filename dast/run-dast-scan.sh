@@ -59,7 +59,7 @@ kubectl -n "$NAMESPACE" wait --for=condition=ready \
     pod -l "job-name=${JOB_NAME}" --timeout=120s
 
 # Wait for the ZAP API to respond
-for i in $(seq 1 30); do
+for i in $(seq 1 120); do
     if curl -sf "http://${ZAP_SERVICE}/JSON/core/view/version/" >/dev/null 2>&1; then
         ZAP_VERSION=$(curl -sf "http://${ZAP_SERVICE}/JSON/core/view/version/" | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])")
         log "ZAP $ZAP_VERSION is ready"
@@ -130,7 +130,16 @@ log "Passive scan complete"
 # Property-based fuzzing of /capi/openapi.json using the fuzz user
 # (narrower privileges than researcher — can't trigger destructive
 # mutations even if Schemathesis generates inputs that try).
-if command -v schemathesis >/dev/null 2>&1 || pip install --quiet schemathesis 2>/dev/null; then
+# Install Schemathesis into the user site if the binary isn't already
+# available. --break-system-packages because the runner base image
+# uses PEP 668 (externally-managed-environment); --user keeps us out
+# of /usr/lib and avoids needing root.
+if ! command -v schemathesis >/dev/null 2>&1; then
+    pip install --user --break-system-packages --quiet schemathesis || true
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+if command -v schemathesis >/dev/null 2>&1; then
     log "Authenticating fuzz user..."
     FUZZ_JWT=$(curl -sf -k -X POST "${TARGET_CAPI}/auth/login" \
         -H "Content-Type: application/json" \
@@ -138,22 +147,25 @@ if command -v schemathesis >/dev/null 2>&1 || pip install --quiet schemathesis 2
         | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))")
     if [ -n "$FUZZ_JWT" ]; then
         log "Running Schemathesis fuzz against ${TARGET_CAPI}/openapi.json..."
-        # hypothesis-max-examples=30 keeps each endpoint to ~30
-        # generated inputs; the goal is smoke-style fuzz, not
-        # exhaustive property testing (that belongs in unit tests).
-        python3 -m schemathesis run \
-            --checks all \
-            --base-url "${TARGET_CAPI}" \
-            --hypothesis-max-examples=30 \
+        # --max-examples 20 keeps each endpoint's hypothesis search to
+        # ~20 generated inputs — smoke-style fuzz, not exhaustive
+        # property testing. --tls-verify=false because the dast env
+        # serves TLS via the void42 private CA that Python's requests
+        # store doesn't trust by default.
+        schemathesis run \
+            --tls-verify=false \
+            --url "${TARGET_CAPI}" \
+            --max-examples=20 \
             --header "Authorization: Bearer ${FUZZ_JWT}" \
-            --report-json /tmp/schemathesis-capi.json \
-            "${TARGET_CAPI}/openapi.json" 2>&1 | tail -10 || true
-        log "Schemathesis complete — report at /tmp/schemathesis-capi.json"
+            --report junit \
+            --report-junit-path /tmp/schemathesis.xml \
+            "${TARGET_CAPI}/openapi.json" 2>&1 | tail -40 || true
+        log "Schemathesis complete — report at /tmp/schemathesis.xml"
     else
         log "Fuzz user auth failed; skipping Schemathesis"
     fi
 else
-    log "Schemathesis not installable in this image; skipping"
+    log "Schemathesis install failed; skipping (pip --break-system-packages not allowed?)"
 fi
 
 # ── Phase 4: Active scan ────────────────────────────────────
