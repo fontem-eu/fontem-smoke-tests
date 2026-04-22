@@ -44,7 +44,7 @@ test.describe('Consolidator — read-only smoke', () => {
     // Each rule has the metadata the UI cards need
     for (const r of rules) {
       expect(r.confidence).toBeGreaterThan(0)
-      expect(['merge', 'link', 'flag', 'noop']).toContain(r.action)
+      expect(['merge', 'link', 'flag', 'noop', 'enrich']).toContain(r.action)
       expect(Array.isArray(r.entity_types)).toBe(true)
     }
   })
