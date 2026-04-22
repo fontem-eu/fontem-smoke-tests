@@ -6,15 +6,28 @@
 # ZAP runs in daemon mode with the API enabled. The orchestration script
 # drives the scan externally: spider → passive (with e2e traffic) → active → report.
 
-apiVersion: v1
-kind: Secret
+# BookStack API credentials — materialised by VSO from
+# Vault at `secret/gmr-dast/bookstack`. The token_id / token_secret
+# pair was moved out of this manifest on 2026-04-22; the stringData
+# block lived here in plaintext before that (gitleaks found it,
+# we rotated via: read existing value → vault kv put → delete inline).
+#
+# Rotate: `vault kv put secret/gmr-dast/bookstack token_id=... token_secret=...`
+# VSO syncs within refreshAfter (24h) or on annotation refresh-now=true.
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
 metadata:
   name: bookstack-api
   namespace: gmr-dast
-type: Opaque
-stringData:
-  token_id: "zapc8ae4702e028c90b30ba6e80d89675fc"
-  token_secret: "5ed936c26b75ff7b2353794904263c29f2d29ee95e1adc9cba21f67b3427d105"
+spec:
+  type: kv-v2
+  mount: secret
+  path: gmr-dast/bookstack
+  destination:
+    create: true
+    name: bookstack-api
+  refreshAfter: 24h
+  vaultAuthRef: gmr-dast-vault-auth
 
 ---
 apiVersion: batch/v1
