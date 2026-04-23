@@ -2,6 +2,12 @@ name: Build and sign smoke tests image
 on:
   push:
     branches: [main]
+    # The deploy-staging job below sed-bumps deployment/cronjob-staging.yaml
+    # and pushes back to main. Without this path filter we'd loop: every
+    # merge triggers a build, which triggers a bump commit, which triggers
+    # another build, etc.
+    paths-ignore:
+      - 'deployment/**'
   pull_request:
 
 jobs:
@@ -62,3 +68,77 @@ jobs:
           registry-user: ${{ secrets.REGISTRY_USER }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
           sbom-path: ${{ steps.sbom.outputs.sbom-path }}
+
+  # Auto-bump the staging CronJob to the image we just built + signed,
+  # kubectl-apply it, and write the version marker to gitops/staging so
+  # the promote workflow can gate prod on the same version. This is the
+  # piece that used to be manual (see commits f24ed8d, 9c880c4, and the
+  # vb09d326 drift that motivated all this).
+  deploy-staging:
+    needs: build-sign
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # Push auth is set up later via `git remote set-url` — matches
+        # the pattern used in gmr-web / edgar-gmr-etl CI.
+
+      - name: Install kubectl
+        run: |
+          curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl
+          chmod +x /usr/local/bin/kubectl
+
+      - name: Set up kubeconfig
+        env:
+          KUBECONFIG_DATA: ${{ secrets.PROMOTE_KUBECONFIG }}
+        run: |
+          if [ -z "$KUBECONFIG_DATA" ]; then
+            echo "::error::PROMOTE_KUBECONFIG secret is empty — set it on this repo (same secret as golden/gitops)"
+            exit 1
+          fi
+          echo "$KUBECONFIG_DATA" | base64 -d > /tmp/kubeconfig
+          echo "KUBECONFIG=/tmp/kubeconfig" >> $GITHUB_ENV
+
+      - name: Bump CronJob image tag + gitops version marker
+        env:
+          REG_USER: ${{ secrets.REGISTRY_USER }}
+          REG_PASS: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          # Tag convention used by the docker-build-sign action is
+          # v<short-sha>. Match it exactly so the tag in the registry
+          # is what we apply to the cluster.
+          TAG="v$(git rev-parse --short HEAD)"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+          # 1. Update this repo's staging CronJob manifest.
+          # Matches gmr-smoke-tests:<anything-but-space> — avoids eating
+          # surrounding YAML if the tag format ever widens.
+          sed -i "s|gmr-smoke-tests:[A-Za-z0-9.-]*|gmr-smoke-tests:$TAG|" deployment/cronjob-staging.yaml
+          git config user.name "GMR CI"
+          git config user.email "ci@void42.internal"
+          git remote set-url origin "http://oauth2:$REG_PASS@gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-smoke-tests.git"
+          if ! git diff --quiet; then
+            # [skip ci] is belt-and-braces; paths-ignore on the trigger
+            # is the primary loop guard.
+            git commit -am "ci: bump staging CronJob to $TAG [skip ci]"
+            git push origin main
+          fi
+
+          # 2. Write the version marker in gitops/staging. This is what
+          # fires promote.yml's `paths: staging/**` trigger so prod rides
+          # the same gate as every other service.
+          git clone --depth=1 http://oauth2:$REG_PASS@gitea-http.dev-tools.svc.cluster.local:3000/golden/gitops.git /tmp/gitops
+          cd /tmp/gitops
+          sed -i "s/version: \".*\"/version: \"$TAG\"/" staging/gmr-smoke-tests.yaml
+          git config user.name "GMR CI"
+          git config user.email "ci@void42.internal"
+          if ! git diff --quiet; then
+            git add staging/gmr-smoke-tests.yaml
+            git commit -m "ci: bump staging/gmr-smoke-tests to $TAG"
+            git push origin main
+          fi
+
+      - name: Apply staging CronJob
+        # Run against the updated local manifest. If the sed above was
+        # a no-op (re-run on the same commit), apply is still idempotent.
+        run: kubectl apply -f deployment/cronjob-staging.yaml -n gmr-staging
