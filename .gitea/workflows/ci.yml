@@ -41,12 +41,6 @@ jobs:
           path: .gmr-ci
           token: ${{ secrets.GMR_CI_READ_TOKEN }}
 
-      - name: Setup Docker CLI + Cosign
-        run: |
-          curl -fsSL https://nexus.void42.internal/repository/docker-releases/linux/static/stable/x86_64/docker-27.5.1.tgz | tar xz --strip-components=1 -C /usr/local/bin docker/docker
-          curl -sL https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 -o /usr/local/bin/cosign
-          chmod +x /usr/local/bin/cosign
-
       - name: Install deps (for cyclonedx-npm)
         run: npm ci --prefer-offline --no-audit --no-fund
 
@@ -82,6 +76,11 @@ jobs:
       - uses: actions/checkout@v4
         # Push auth is set up later via `git remote set-url` — matches
         # the pattern used in gmr-web / edgar-gmr-etl CI.
+      - uses: actions/checkout@v4
+        with:
+          repository: golden/gmr-ci
+          path: .gmr-ci
+          token: ${{ secrets.GMR_CI_READ_TOKEN }}
 
       - name: Install kubectl
         run: |
@@ -99,18 +98,17 @@ jobs:
           echo "$KUBECONFIG_DATA" | base64 -d > /tmp/kubeconfig
           echo "KUBECONFIG=/tmp/kubeconfig" >> $GITHUB_ENV
 
-      - name: Bump CronJob image tag + gitops version marker
-        env:
-          REG_USER: ${{ secrets.REGISTRY_USER }}
-          REG_PASS: ${{ secrets.REGISTRY_PASSWORD }}
-        run: |
-          # Tag convention used by the docker-build-sign action is
-          # v<short-sha>. Match it exactly so the tag in the registry
-          # is what we apply to the cluster.
-          TAG="v$(git rev-parse --short HEAD)"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
+      - id: tag
+        name: Compute image tag
+        # Match docker-build-sign's v<short-sha> convention so the tag
+        # in the registry is what we bump/apply.
+        run: echo "value=v$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-          # 1. Update this repo's staging CronJob manifest.
+      - name: Bump CronJob image tag (in-repo)
+        env:
+          REG_PASS: ${{ secrets.REGISTRY_PASSWORD }}
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
           # Matches gmr-smoke-tests:<anything-but-space> — avoids eating
           # surrounding YAML if the tag format ever widens.
           sed -i "s|gmr-smoke-tests:[A-Za-z0-9.-]*|gmr-smoke-tests:$TAG|" deployment/cronjob-staging.yaml
@@ -124,19 +122,15 @@ jobs:
             git push origin main
           fi
 
-          # 2. Write the version marker in gitops/staging. This is what
-          # fires promote.yml's `paths: staging/**` trigger so prod rides
-          # the same gate as every other service.
-          git clone --depth=1 http://oauth2:$REG_PASS@gitea-http.dev-tools.svc.cluster.local:3000/golden/gitops.git /tmp/gitops
-          cd /tmp/gitops
-          sed -i "s/version: \".*\"/version: \"$TAG\"/" staging/gmr-smoke-tests.yaml
-          git config user.name "GMR CI"
-          git config user.email "ci@void42.internal"
-          if ! git diff --quiet; then
-            git add staging/gmr-smoke-tests.yaml
-            git commit -m "ci: bump staging/gmr-smoke-tests to $TAG"
-            git push origin main
-          fi
+      # Write the version marker in golden/gitops staging/. This is what
+      # fires promote.yml's `paths: staging/**` trigger so prod rides
+      # the same gate as every other service.
+      - uses: ./.gmr-ci/actions/gitops-bump
+        with:
+          service: gmr-smoke-tests
+          tag: ${{ steps.tag.outputs.value }}
+          env: staging
+          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Apply staging CronJob
         # Run against the updated local manifest. If the sed above was
