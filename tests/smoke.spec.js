@@ -1,9 +1,13 @@
 /**
- * GMR Production Smoke Tests
+ * Production smoke tests.
  *
  * Validates critical user flows through the UI — every test interacts
- * with the browser, no direct API calls. Runs every 8 hours via
- * Kubernetes CronJob.
+ * with the browser, no direct API calls.
+ *
+ * Cadence:
+ *   - prod: hourly via the gmr-smoke-tests CronJob (deployment/cronjob.yaml)
+ *   - staging: same CronJob spec but suspended; invoked on demand by
+ *     the gitops promote workflow as a pre-prod gate
  *
  * Run: BASE_URL=https://gmr.void42.net npx playwright test
  */
