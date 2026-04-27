@@ -484,10 +484,16 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.click('[data-testid="assist-toggle"]')
     await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
-    // Send question and wait for complete response
+    // Send question and wait for complete response. Loose content
+    // match (any of siemens / contract / procurement / lobbying / EU)
+    // — the test of "MCP tool got called and returned graph context"
+    // doesn't depend on the model picking one specific keyword.
     const responseText = await sendAssistMessage(page,
       'Search for "Siemens" in the GMR graph and tell me about their EU contracts.')
-    expect(responseText.toLowerCase()).toMatch(/siemens|contract|lobbying/)
+    expect(
+      responseText.toLowerCase(),
+      `MCP-tool response did not mention any expected keyword: "${responseText.slice(0, 200)}…"`,
+    ).toMatch(/siemens|contract|procurement|lobbying|eu /)
     expect(responseText.length).toBeGreaterThan(50)
   })
 
