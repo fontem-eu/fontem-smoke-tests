@@ -426,16 +426,12 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.click('[data-testid="assist-toggle"]')
     await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
-    // Send question and wait for complete response. The content check is
-    // deliberately loose: assert we got a substantive answer that mentions
-    // either the ticker or the company. A model that answers "Apple's
-    // common stock trades as AAPL on NASDAQ" passes; a model that returns
-    // an empty string or generic refusal fails.
+    // Send question and wait for complete response. The only thing we
+    // assert is that the response mentions the ticker or the company —
+    // Mistral may legitimately answer in one word ("AAPL") or in a
+    // sentence, both pass. The previous length check (>20 chars)
+    // wrongly flagged the correct one-word answer as "trivial".
     const responseText = await sendAssistMessage(page, 'What is Apple Inc\'s ticker symbol?')
-    expect(
-      responseText.length,
-      `Assistant returned empty or trivial response: "${responseText}"`,
-    ).toBeGreaterThan(20)
     expect(
       responseText,
       `Assistant response did not mention Apple or AAPL: "${responseText}"`,
