@@ -375,6 +375,68 @@ test.describe.serial('Production Smoke Tests', () => {
     }
   })
 
+  // ── Atlas (Eurostat dataset explorer) ──────────────────────────
+
+  test('ATLAS-19: /atlas exits the loading state and renders the dataset picker', async ({ page }) => {
+    // Regression for the prod bug where MapLibre threw synchronously
+    // on a null container during the loading state, aborting onMounted
+    // before fetchDatasets ever ran — the view sat on the "Loading
+    // datasets…" spinner forever and the user saw nothing.
+    //
+    // The smoke check is deliberately structural: the dataset picker
+    // must become visible, the loading status must NOT be visible, and
+    // the picker must contain real options. We don't assert a specific
+    // dataset count because the seed evolves; "more than zero" is the
+    // contract the user actually cares about.
+    await page.goto('/atlas')
+
+    await expect(page.locator('[data-testid="atlas-dataset"]'))
+      .toBeVisible({ timeout: 15_000 })
+
+    // Loading + error states must both be gone by the time the picker
+    // is up. Their continued presence is a sign the chain (gmr-api →
+    // /atlas/datasets → fontem-stats Postgres) has degraded.
+    await expect(page.locator('[data-testid="atlas-loading"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="atlas-error"]')).toHaveCount(0)
+
+    const optCount = await page.locator('[data-testid="atlas-dataset"] option').count()
+    // 1 placeholder + N dataset options. Placeholder + at least one
+    // real dataset is the floor — if we drop below that the catalog
+    // is broken in prod.
+    expect(
+      optCount,
+      'Atlas picker has no dataset options — fontem-stats catalog likely empty',
+    ).toBeGreaterThan(1)
+  })
+
+  test('ATLAS-20: picking a dataset triggers a backend series fetch', async ({ page }) => {
+    // Locks the contract that the UI actually talks to /api/atlas/*.
+    // If the URL prefix drifts (we've already had one /api/stats/* →
+    // /api/atlas/* rename) the smoke fails here before promote.
+    let seriesUrl = null
+    page.on('response', (resp) => {
+      if (resp.url().includes('/api/atlas/series')) seriesUrl = resp.url()
+    })
+    await page.goto('/atlas')
+    const picker = page.locator('[data-testid="atlas-dataset"]')
+    await expect(picker).toBeVisible({ timeout: 15_000 })
+
+    // Pick a real dataset — first non-placeholder option.
+    const firstReal = await picker.locator('option').nth(1).getAttribute('value')
+    if (!firstReal) test.skip()
+    await picker.selectOption(firstReal)
+
+    // Backend hit may be a few hundred ms; the URL should carry the
+    // dataset code we picked AND a nuts_level (the choropleth query).
+    await page.waitForResponse(
+      (r) => r.url().includes('/api/atlas/series') && r.status() === 200,
+      { timeout: 15_000 },
+    )
+    expect(seriesUrl, 'no /api/atlas/series request was issued').toBeTruthy()
+    expect(seriesUrl).toContain(`dataset=${firstReal}`)
+    expect(seriesUrl).toContain('nuts_level=')
+  })
+
   // ── AI Assistant (via UI) ───────────────────────────────────────
 
   /**
