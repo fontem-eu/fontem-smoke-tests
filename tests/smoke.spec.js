@@ -453,18 +453,20 @@ test.describe.serial('Production Smoke Tests', () => {
     const datasets = await cat.json()
     expect(datasets.length, 'catalog must not be empty').toBeGreaterThan(0)
 
-    // Run requests in parallel — 28 datasets × ~1-3s each adds up
-    // sequentially. Each response is checked independently; status >= 400
-    // gets accumulated into `failures` regardless of how many fail.
+    // Run requests in parallel + clamp to a recent year window. The
+    // first version of this test pulled multi-decade NUTS-2 series
+    // for every dataset (75K rows for GDP alone) and timed out the
+    // whole 15-min smoke gate. We only need to know the response
+    // SHAPE is valid — `start=<recent>` shrinks each payload to ~1
+    // year while still exercising every dataset's flag/dimensions/
+    // value pipeline.
+    const recentYear = new Date().getFullYear() - 1
     const probes = datasets.map(async (d) => {
-      // Use the smallest available NUTS level so payloads stay
-      // moderate (NUTS-3 of any popular dataset is huge).
       const level = Math.min(...(d.nuts_levels || [2]))
+      const url = `/api/atlas/series?dataset=${encodeURIComponent(d.code)}` +
+                  `&nuts_level=${level}&start=${recentYear}`
       try {
-        const r = await request.get(
-          `/api/atlas/series?dataset=${encodeURIComponent(d.code)}&nuts_level=${level}`,
-          { timeout: 30_000 },
-        )
+        const r = await request.get(url, { timeout: 20_000 })
         if (r.status() >= 400) {
           const body = (await r.text()).slice(0, 160)
           return `${d.code} (lvl=${level}) → ${r.status()}: ${body}`
