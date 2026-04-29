@@ -681,6 +681,119 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(responseText.length).toBeGreaterThan(50)
   })
 
+  // ── Usefulness gates (post-revamp) ────────────────────────────────
+  //
+  // The three tests below were added with the assistant revamp (feat:
+  // investigate_entity composite tool + system-prompt date injection +
+  // /data-quality/source-freshness summary). They guard the user-visible
+  // bugs the revamp fixed:
+  //   * ASSIST-22 — picking the wrong tool (get_company on an authority)
+  //                 silently returned no useful data; investigate_entity
+  //                 dispatches by label so this no longer happens.
+  //   * ASSIST-23 — grounded numeric claims: report quoted "thousands of
+  //                 contracts" with no actual number; the new tool surface
+  //                 forces a concrete count to land in the response.
+  //   * ASSIST-24 — coverage awareness: user couldn't tell whether a
+  //                 dataset was current; freshness summary is injected
+  //                 into the system prompt so the assistant can cite
+  //                 explicit date ranges.
+  //
+  // Like the rest of the ASSIST-* battery, these tolerate phrasing
+  // variance — the LLM is allowed to write English however it wants as
+  // long as the *content* of the answer demonstrates the underlying
+  // capability.
+
+  test('ASSIST-22: Authority investigation dispatches correctly (no wrong-tool dead-end)', async ({ page }) => {
+    test.setTimeout(180_000)
+    if (!reportId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/reports/${reportId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+    // Metro Mondego is a Portuguese contracting authority. Pre-revamp,
+    // the model would call get_company on it (which 404s) and surface
+    // "I couldn't find anything". The investigate_entity tool now tries
+    // Company → Authority → Lobbyist in turn, so the report has to
+    // mention at least the entity name.
+    const responseText = await sendAssistMessage(
+      page,
+      'Investigate "Metro Mondego" in the GMR graph. What kind of ' +
+      'entity is it (company, authority, etc.) and what data do we have ' +
+      'about it?',
+    )
+    expect(
+      responseText,
+      `Authority investigation did not surface useful info about Metro Mondego: "${responseText.slice(0, 300)}…"`,
+    ).toMatch(/Metro|Mondego/i)
+    // Has to be more than the "not found" stub the broken path used to
+    // emit. 80 chars filters out generic refusals, doesn't pin phrasing.
+    expect(responseText.length).toBeGreaterThan(80)
+  })
+
+  test('ASSIST-23: Assistant grounds numeric claims in actual graph data', async ({ page }) => {
+    test.setTimeout(180_000)
+    if (!reportId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/reports/${reportId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+    // Asking for a count means the model has to pick the
+    // `investigate_entity` tool, read the contract list, and quote a
+    // concrete number. Pre-revamp the model would say "many" or "several"
+    // because get_contracts wasn't always picked.
+    const responseText = await sendAssistMessage(
+      page,
+      'How many EU public procurement contracts do we have for Siemens AG ' +
+      'in the GMR graph? Give me the exact count.',
+    )
+    // At least one digit in the response — proves the model didn't fall
+    // back to "many"/"several"/"some" hand-waving.
+    expect(
+      responseText,
+      `Numeric-grounding response had no digits: "${responseText.slice(0, 300)}…"`,
+    ).toMatch(/\d/)
+    // And it should mention Siemens or contracts — guards against the
+    // model hallucinating a number for some other entity.
+    expect(responseText.toLowerCase()).toMatch(/siemens|contract/)
+  })
+
+  test('ASSIST-24: Assistant cites concrete data coverage when asked', async ({ page }) => {
+    test.setTimeout(180_000)
+    if (!reportId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/reports/${reportId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+    // The /data-quality/source-freshness endpoint feeds a per-source
+    // coverage block into the system prompt every turn. That means
+    // the assistant should be able to answer "what date range do you
+    // cover?" without calling a tool.
+    const responseText = await sendAssistMessage(
+      page,
+      'What date range does your EU public procurement (TED contracts) ' +
+      'data cover? Give me the earliest and latest dates you have.',
+    )
+    // A 4-digit year — proves the model surfaced a real date range
+    // rather than refusing or hand-waving. We don't pin the specific
+    // year because it shifts as the loaders run.
+    expect(
+      responseText,
+      `Coverage response did not include a year: "${responseText.slice(0, 300)}…"`,
+    ).toMatch(/20\d{2}/)
+    // And it should be meaningfully long (≥ 50 chars) — short answers
+    // like "I don't know" or "various" have been the failure mode.
+    expect(responseText.length).toBeGreaterThan(50)
+  })
+
   // ── Cleanup ────────────────────────────────────────────────────
 
   test('CLEANUP-21: Delete test report via UI', async ({ page }) => {
