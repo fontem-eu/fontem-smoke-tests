@@ -437,6 +437,128 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(seriesUrl).toContain('nuts_level=')
   })
 
+  test('ATLAS-21: every dataset returns 2xx from /atlas/series', async ({ request }) => {
+    // First-line guard: a single 5xx response on /atlas/series breaks
+    // the whole UI for that dataset. Iterate every catalog entry by
+    // API so we don't depend on which one the picker sorts first.
+    // The original prod bug (Observation.flags typed `str` but the DB
+    // column is `text[]`) only fired for datasets where Eurostat
+    // actually emits flags — `isoc_r_iuse_i` doesn't, `nama_10r_2gdp`
+    // does. Picking only the first dataset hid the bug; iterating
+    // surfaces it.
+    test.setTimeout(180_000)
+
+    const cat = await request.get('/api/atlas/datasets')
+    expect(cat.status(), 'catalog endpoint must be 200').toBe(200)
+    const datasets = await cat.json()
+    expect(datasets.length, 'catalog must not be empty').toBeGreaterThan(0)
+
+    // Run requests in parallel — 28 datasets × ~1-3s each adds up
+    // sequentially. Each response is checked independently; status >= 400
+    // gets accumulated into `failures` regardless of how many fail.
+    const probes = datasets.map(async (d) => {
+      // Use the smallest available NUTS level so payloads stay
+      // moderate (NUTS-3 of any popular dataset is huge).
+      const level = Math.min(...(d.nuts_levels || [2]))
+      try {
+        const r = await request.get(
+          `/api/atlas/series?dataset=${encodeURIComponent(d.code)}&nuts_level=${level}`,
+          { timeout: 30_000 },
+        )
+        if (r.status() >= 400) {
+          const body = (await r.text()).slice(0, 160)
+          return `${d.code} (lvl=${level}) → ${r.status()}: ${body}`
+        }
+      } catch (e) {
+        return `${d.code} (lvl=${level}) → request error: ${String(e).slice(0, 160)}`
+      }
+      return null
+    })
+    const failures = (await Promise.all(probes)).filter(Boolean)
+    expect(
+      failures,
+      `${failures.length}/${datasets.length} datasets returned errors:\n  ` +
+        failures.join('\n  '),
+    ).toEqual([])
+  })
+
+  test('ATLAS-22: opening a plot in the browser paints a coloured choropleth', async ({ page }) => {
+    // Browser-side complement to ATLAS-21. Targets nama_10r_2gdp
+    // specifically — that dataset has Eurostat-emitted flag codes
+    // (`['p']`, `['e']`, etc.) which exposed the schema mismatch in
+    // prod. If the dataset isn't in the catalog (env yet to seed),
+    // fall back to whatever the picker offers.
+    //
+    //   1. no /api/atlas/* response 4xx/5xx during the interaction
+    //   2. no JS console errors (modulo CSP + WebGL noise)
+    //   3. choropleth canvas renders > 15 KB PNG (i.e. coloured)
+    const apiFailures = []
+    const consoleErrors = []
+    page.on('response', (resp) => {
+      if (resp.url().includes('/api/atlas/') && resp.status() >= 400) {
+        apiFailures.push(`${resp.status()} ${resp.url()}`)
+      }
+    })
+    page.on('console', (m) => {
+      if (m.type() === 'error') consoleErrors.push(m.text())
+    })
+    page.on('pageerror', (e) => consoleErrors.push(`[pageerror] ${e.message}`))
+
+    await page.goto('/atlas')
+    const picker = page.locator('[data-testid="atlas-dataset"]')
+    await expect(picker).toBeVisible({ timeout: 15_000 })
+
+    // Prefer the GDP dataset — known to carry flag arrays in prod.
+    // Fall back if not in the catalog yet.
+    const want = 'nama_10r_2gdp'
+    const optValues = await picker.locator('option').evaluateAll(
+      (els) => els.map((o) => o.value).filter(Boolean),
+    )
+    const target = optValues.includes(want) ? want : optValues[0]
+    if (!target) test.skip()
+    await picker.selectOption(target)
+
+    // Wait for either the choropleth to paint OR an error banner to
+    // appear, whichever happens first. Either way we then assert.
+    await Promise.race([
+      page.locator('[data-testid="atlas-map"] canvas')
+        .waitFor({ state: 'visible', timeout: 20_000 }),
+      page.locator('[data-testid="atlas-series-error"]')
+        .waitFor({ state: 'visible', timeout: 20_000 }),
+    ]).catch(() => {})
+
+    // 1. No /api/atlas/* request 4xx/5xx'd. CSP / pre-existing
+    //    failures elsewhere on the page are filtered out.
+    expect(
+      apiFailures,
+      `Atlas API returned errors: ${apiFailures.join(', ')}`,
+    ).toEqual([])
+
+    // 2. No JS errors. Filter out two classes of environmental noise
+    //    that fire on every page load and aren't Atlas-side:
+    //      - WebGL / canvas not supported in headless Chromium
+    //      - CSP `script-src` violations from the consent banner /
+    //        analytics inline tags (already on prod, page-wide).
+    //    Any error that doesn't match those is a real Atlas bug.
+    const NOISE_RE = /WebGL|WEBGL|getContext|browser-supports-canvas|Content Security Policy/i
+    const realErrors = consoleErrors.filter((e) => !NOISE_RE.test(e))
+    expect(
+      realErrors,
+      `JS console errors: ${realErrors.join(' | ')}`,
+    ).toEqual([])
+
+    // 3. Choropleth canvas exists and isn't a blank tile. A blank
+    //    canvas screenshots to a tiny PNG; varied region colours
+    //    push it past 15 KB.
+    const canvas = page.locator('[data-testid="atlas-map"] canvas').first()
+    await expect(canvas).toBeVisible()
+    const shot = await canvas.screenshot()
+    expect(
+      shot.length,
+      `choropleth canvas screenshot is ${shot.length} bytes — likely blank`,
+    ).toBeGreaterThan(15_000)
+  })
+
   // ── AI Assistant (via UI) ───────────────────────────────────────
 
   /**
