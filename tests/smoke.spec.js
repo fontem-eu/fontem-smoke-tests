@@ -624,7 +624,7 @@ test.describe.serial('Production Smoke Tests', () => {
     ).toMatch(/AAPL|Apple/i)
   })
 
-  test('ASSIST-20: Assistant proposes edit and user accepts it', async ({ page }) => {
+  test('ASSIST-20: Assistant proposes edit, user applies it, content lands in editor', async ({ page }) => {
     test.setTimeout(180_000)
     if (!reportId) test.skip()
     await uiLogin(page)
@@ -635,28 +635,27 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.click('[data-testid="assist-toggle"]')
     await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
-    // Send proposal request and wait for complete response
+    // Distinctive marker so we can prove the inserted content actually
+    // landed in the editor (not just that the "Applied" badge flipped —
+    // that was the gap that let the apply-flow bug ship).
+    const marker = `MARKER-ASSIST20-${RUN_ID.slice(0, 8)}`
     await sendAssistMessage(page,
-      'Use the propose_edit tool to add a new section to this report. ' +
-      'The content should be: "Apple Inc. (AAPL) is a multinational technology company headquartered in Cupertino, California." ' +
-      'Use the add_section action.')
+      'Use the propose_edit tool with action="insert_content" to add a paragraph ' +
+      `to this report. The paragraph must contain the exact string ${marker}. ` +
+      'Just one short paragraph — no other prose.')
 
-    // Proposals should now be parsed and rendered
+    // Proposal card should render.
     await expect(page.locator('[data-testid="assist-proposals"]').last()).toBeVisible({ timeout: 10_000 })
-
-    // Verify proposal has an action label and description
     await expect(page.locator('[data-testid="proposal-action"]').last()).toBeVisible()
-    await expect(page.locator('[data-testid="proposal-desc"]').last()).toBeVisible()
 
-    // Click "Apply" on the most recent proposal
+    // Apply the proposal.
     await page.locator('[data-testid="proposal-apply"]').last().click()
-
-    // The proposal should now show "Applied" status
     await expect(page.locator('[data-testid="proposal-applied"]').last()).toBeVisible({ timeout: 5_000 })
 
-    // Verify the proposal was applied by checking status badge is visible
-    // (the "Applied" badge confirms the executeProposal flow succeeded)
-    await expect(page.locator('[data-testid="proposal-applied"]').last()).toBeVisible()
+    // The apply-flow regression: the editor used to get blown away on apply,
+    // so the badge would say "Applied" while the editor was empty. We now
+    // check the editor body actually contains the inserted marker.
+    await expect(page.locator('.tiptap-editor .tiptap')).toContainText(marker, { timeout: 10_000 })
   })
 
   test('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
@@ -794,6 +793,130 @@ test.describe.serial('Production Smoke Tests', () => {
     // And it should be meaningfully long (≥ 50 chars) — short answers
     // like "I don't know" or "various" have been the failure mode.
     expect(responseText.length).toBeGreaterThan(50)
+  })
+
+  // ── Full-flow gate: assistant generates → apply → save → reload ──
+  //
+  // The post-revamp smoke battery (ASSIST-22/23/24) covers what the
+  // model SAYS but not what the editor PERSISTS. The bug class that
+  // got us here ("clicking Apply does nothing") only shows up after
+  // a reload, so this test deliberately reloads the page and checks
+  // the inserted content is still there.
+
+  test('ASSIST-25: full assistant→edit→save→reload round-trip', async ({ page }) => {
+    test.setTimeout(240_000)
+    await uiLogin(page)
+
+    // Use a fresh report so this test doesn't fight ASSIST-20's
+    // editor state (and so it can run in isolation in dev too).
+    await page.goto('/my-reports')
+    await page.click('[data-testid="new-report-btn"]')
+    await page.waitForURL(/\/reports\/.*\/edit/, { timeout: 15_000 })
+    const localReportId = page.url().match(/\/reports\/([^/]+)\/edit/)?.[1]
+    expect(localReportId).toBeTruthy()
+
+    // Set a title so the report has something the user could find again.
+    await page.fill('[data-testid="report-title-input"]', `Smoke Round-Trip ${RUN_ID.slice(0, 8)}`)
+
+    // Open assistant.
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+    // Ask for something simple enough not to bleed tokens but real
+    // enough to need a tool call. The marker pins persistence at the
+    // end — the model echoes it because we ask explicitly.
+    const marker = `RT-${RUN_ID.slice(0, 8)}`
+    await sendAssistMessage(page,
+      `Use propose_edit with action="insert_content" to add a brief one-paragraph ` +
+      `note about Apple Inc. (AAPL) to this report. The paragraph MUST contain ` +
+      `the literal string ${marker}. One paragraph total — keep it short.`)
+
+    // A proposal must arrive. If it doesn't, the model picked the wrong
+    // tool — that's a regression we want loud, not silent.
+    await expect(page.locator('[data-testid="assist-proposals"]').last()).toBeVisible({ timeout: 30_000 })
+    await page.locator('[data-testid="proposal-apply"]').last().click()
+    await expect(page.locator('[data-testid="proposal-applied"]').last()).toBeVisible({ timeout: 10_000 })
+
+    // Editor body has the marker (apply-time persistence — was the bug).
+    await expect(page.locator('.tiptap-editor .tiptap')).toContainText(marker, { timeout: 10_000 })
+
+    // The fix auto-saves on apply, so the user shouldn't have to click
+    // Save themselves. Click anyway — it's idempotent and proves the
+    // explicit save still works.
+    await page.click('[data-testid="save-report"]')
+    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 10_000 })
+
+    // The real persistence check: reload the page (full reset of the
+    // editor, fresh fetch from the API) and confirm the marker survives.
+    // Pre-fix, the apply mutated the editor in-memory only — reload
+    // wiped it. This is the gate that would have caught the bug.
+    await page.reload()
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.tiptap-editor .tiptap')).toContainText(marker, { timeout: 15_000 })
+
+    // Light follow-up edit: type a single character at the end and save
+    // again. Catches the "save broken after assistant edit" tail of the
+    // same bug class.
+    const editor = page.locator('.tiptap-editor .tiptap')
+    await editor.click()
+    await page.keyboard.press('End')
+    await page.keyboard.type(' ✓')
+    await page.click('[data-testid="save-report"]')
+    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 10_000 })
+
+    // Cleanup — don't accumulate round-trip reports across runs.
+    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    await page.request.delete(`/capi/reports/${localReportId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => {})
+  })
+
+  // ── Public-report regression gate ────────────────────────────────
+  //
+  // Regression: clicking a shared link to a public_open report
+  // bounced the visitor to /login because the frontend's auth gate
+  // matched any path under /reports with `startsWith`. The backend
+  // had already been fixed; this test pins the frontend half so a
+  // future router change can't quietly re-introduce the dead-end.
+
+  test('PUBLIC-1: public_open report is viewable by an anonymous visitor', async ({ page, context }) => {
+    test.setTimeout(120_000)
+    if (!reportId) test.skip()
+
+    // Make the report public_open as the authenticated user, then
+    // drop the session and prove an anonymous visit succeeds.
+    await uiLogin(page)
+    await page.goto(`/reports/${reportId}/edit`)
+    await expect(page.locator('[data-testid="visibility-select"]')).toBeVisible({ timeout: 10_000 })
+    await page.selectOption('[data-testid="visibility-select"]', 'public_open')
+    await page.click('[data-testid="save-report"]')
+    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 10_000 })
+
+    // Drop the session (token + cookies) and revisit as a stranger.
+    await page.evaluate(() => localStorage.clear())
+    await context.clearCookies()
+
+    await page.goto(`/reports/${reportId}`)
+
+    // Two failure modes pre-fix:
+    //   - hard redirect to /login (router gate)
+    //   - blank page that hydrates and *then* redirects to /login
+    // We assert the URL stays put AND the report renders.
+    await expect(page).toHaveURL(new RegExp(`/reports/${reportId}$`), { timeout: 10_000 })
+    await expect(page.locator('[data-testid="report-title"]')).toBeVisible({ timeout: 10_000 })
+
+    // Sanity check: no login form lurking on the page (would mean we
+    // landed on /login without changing the URL bar).
+    expect(await page.locator('[data-testid="login-email"]').count()).toBe(0)
+
+    // Restore the report's visibility so subsequent runs aren't
+    // looking at a leftover public_open report.
+    await uiLogin(page)
+    await page.goto(`/reports/${reportId}/edit`)
+    await page.selectOption('[data-testid="visibility-select"]', 'private')
+    await page.click('[data-testid="save-report"]')
+    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 10_000 })
   })
 
   // ── Cleanup ────────────────────────────────────────────────────
