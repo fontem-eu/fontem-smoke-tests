@@ -999,6 +999,70 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 10_000 })
   })
 
+  // ── Consolidation visibility gate ────────────────────────────────
+  //
+  // Concrete sighting that produced this test: eu-LISA showed 4
+  // contracts in the graph view (carried by stale CLIENT_OF summary
+  // edges from a one-shot materialise) and 0 in the contracts list
+  // (live AWARDED query). The fix has two prongs:
+  //   - gmr-consolidator refreshes CLIENT_OF/SUPPLIER_OF on every
+  //     merge (zero staleness on consolidation)
+  //   - edgar-gmr-etl runs `materialize_trade_edges` nightly as a
+  //     defence-in-depth bound on staleness from non-consolidator
+  //     paths.
+  //
+  // The smoke test asserts the post-fix invariant: for any
+  // authority, `Σ CLIENT_OF.contracts` (what the graph view shows)
+  // must equal `contract_count` from /authorities/{id}/contracts
+  // (what the contracts list shows).
+  //
+  // eu-LISA is the canary because the original incident lived
+  // there; once the cron runs after deploy, the two views are
+  // consistent and stay that way. If the test goes red post-deploy
+  // it means either the cron hasn't run yet (give it 24h) or the
+  // consolidator path drifted again.
+
+  test('CONSOLIDATION-1: graph CLIENT_OF count matches contracts list count', async ({ page }) => {
+    test.setTimeout(60_000)
+    await uiLogin(page)
+
+    // Resolve eu-LISA's authority_id via the unified search.
+    const searchRes = await page.request.get('/api/search?q=eu-LISA&limit=1')
+    expect(searchRes.ok(), 'search endpoint reachable').toBe(true)
+    const search = await searchRes.json()
+    const authority = search.authorities?.[0]
+    if (!authority) test.skip(true, 'eu-LISA not present — graph data was probably re-loaded')
+    const authorityId = authority.authority_id
+
+    // Live count: AWARDED edges from the canonical to Contract nodes.
+    const contractsRes = await page.request.get(
+      `/api/authorities/${encodeURIComponent(authorityId)}/contracts?limit=200`,
+    )
+    expect(contractsRes.ok(), 'contracts endpoint reachable').toBe(true)
+    const contracts = await contractsRes.json()
+    const liveCount = contracts.contract_count
+
+    // Materialised count: sum of CLIENT_OF.contracts on the canonical's
+    // outgoing edges. summary=true is the graph view's default.
+    const graphRes = await page.request.get(
+      `/api/graph/${encodeURIComponent(authorityId)}?depth=1&summary=true`,
+    )
+    expect(graphRes.ok(), 'graph endpoint reachable').toBe(true)
+    const graph = await graphRes.json()
+    const materialisedCount = (graph.edges || [])
+      .filter((e) => e.type === 'CLIENT_OF' && e.source === authorityId)
+      .reduce((acc, e) => acc + (e.properties?.contracts || 0), 0)
+
+    expect(
+      materialisedCount,
+      `eu-LISA visibility split: graph view sees ${materialisedCount} contracts via ` +
+      `CLIENT_OF, contracts list sees ${liveCount} via AWARDED. The two views ` +
+      `must agree — if they don't, the trade-summary edges are stale relative ` +
+      `to AWARDED and the consolidator's post-merge refresh or the nightly ` +
+      `materialize_trade_edges cron is broken.`,
+    ).toBe(liveCount)
+  })
+
   // ── Cleanup ────────────────────────────────────────────────────
 
   test('CLEANUP-21: Delete test report via UI', async ({ page }) => {
