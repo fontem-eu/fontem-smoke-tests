@@ -914,6 +914,13 @@ test.describe.serial('Production Smoke Tests', () => {
     // Editor body has the marker (apply-time persistence — was the bug).
     await expect(page.locator('.tiptap-editor .tiptap')).toContainText(marker, { timeout: 10_000 })
 
+    // Close the assist panel so its DOM doesn't intercept the Save
+    // button click. The panel is an overlay that visually sits above
+    // the editor header; without closing it, Playwright's click
+    // retries are blocked by the message div on top of the button.
+    await page.click('[data-testid="assist-close"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeHidden({ timeout: 5_000 })
+
     // The fix auto-saves on apply, so the user shouldn't have to click
     // Save themselves. Click anyway — it's idempotent and proves the
     // explicit save still works.
