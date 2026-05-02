@@ -542,15 +542,16 @@ test.describe.serial('Production Smoke Tests', () => {
     const datasets = await cat.json()
     expect(datasets.length, 'catalog must not be empty').toBeGreaterThan(0)
 
-    // Run requests in parallel + clamp to a recent year window. The
-    // first version of this test pulled multi-decade NUTS-2 series
-    // for every dataset (75K rows for GDP alone) and timed out the
-    // whole 15-min smoke gate. We only need to know the response
-    // SHAPE is valid — `start=<recent>` shrinks each payload to ~1
-    // year while still exercising every dataset's flag/dimensions/
-    // value pipeline.
+    // Chunked parallelism + recent year window. The first version
+    // pulled multi-decade NUTS-2 series for every dataset (75K rows
+    // for GDP alone) and timed out the 15-min smoke gate; the second
+    // fired all 40 in `Promise.all` and tripped the gmr-web nginx
+    // burst limit (2 req/s, burst 30 — see nginx.conf rate-limit
+    // zones) with 429s on the tail of the dataset list. Five at a
+    // time stays under the burst, finishes in ~30s, and still
+    // exercises every dataset's flag/dimensions/value pipeline.
     const recentYear = new Date().getFullYear() - 1
-    const probes = datasets.map(async (d) => {
+    async function probeDataset(d) {
       const level = Math.min(...(d.nuts_levels || [2]))
       const url = `/api/atlas/series?dataset=${encodeURIComponent(d.code)}` +
                   `&nuts_level=${level}&start=${recentYear}`
@@ -564,8 +565,14 @@ test.describe.serial('Production Smoke Tests', () => {
         return `${d.code} (lvl=${level}) → request error: ${String(e).slice(0, 160)}`
       }
       return null
-    })
-    const failures = (await Promise.all(probes)).filter(Boolean)
+    }
+    const failures = []
+    const CHUNK = 5
+    for (let i = 0; i < datasets.length; i += CHUNK) {
+      const slice = datasets.slice(i, i + CHUNK)
+      const results = await Promise.all(slice.map(probeDataset))
+      for (const f of results) if (f) failures.push(f)
+    }
     expect(
       failures,
       `${failures.length}/${datasets.length} datasets returned errors:\n  ` +
