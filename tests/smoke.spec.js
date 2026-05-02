@@ -542,16 +542,23 @@ test.describe.serial('Production Smoke Tests', () => {
     const datasets = await cat.json()
     expect(datasets.length, 'catalog must not be empty').toBeGreaterThan(0)
 
-    // Chunked parallelism + recent year window. The first version
-    // pulled multi-decade NUTS-2 series for every dataset (75K rows
-    // for GDP alone) and timed out the 15-min smoke gate; the second
-    // fired all 40 in `Promise.all` and tripped the gmr-web nginx
-    // burst limit (2 req/s, burst 30 — see nginx.conf rate-limit
-    // zones) with 429s on the tail of the dataset list. Five at a
-    // time stays under the burst, finishes in ~30s, and still
-    // exercises every dataset's flag/dimensions/value pipeline.
+    // Serial loop + recent year window. Three iterations to get this
+    // right:
+    //  1. multi-decade NUTS-2 in `Promise.all` → 15-min timeout (75K
+    //     rows for GDP alone).
+    //  2. all-40 in `Promise.all` with `start=<recent>` → tripped the
+    //     gmr-web nginx burst limit (2 req/s, burst 30 — see
+    //     nginx.conf 00-rate-limit.conf), got 429s on the tail.
+    //  3. chunk-of-5 → still 429'd because earlier tests in the suite
+    //     had already eaten the burst counter for the smoke pod's IP
+    //     by the time ATLAS-21 ran.
+    // Serial is plenty: each request is ~0.5–1 s, 40 datasets fit in
+    // ~30 s, well under both the test budget and the rate limit. We
+    // still hit every dataset; we just don't paralellise in a way
+    // that contends with the rest of the suite.
     const recentYear = new Date().getFullYear() - 1
-    async function probeDataset(d) {
+    const failures = []
+    for (const d of datasets) {
       const level = Math.min(...(d.nuts_levels || [2]))
       const url = `/api/atlas/series?dataset=${encodeURIComponent(d.code)}` +
                   `&nuts_level=${level}&start=${recentYear}`
@@ -559,19 +566,11 @@ test.describe.serial('Production Smoke Tests', () => {
         const r = await request.get(url, { timeout: 20_000 })
         if (r.status() >= 400) {
           const body = (await r.text()).slice(0, 160)
-          return `${d.code} (lvl=${level}) → ${r.status()}: ${body}`
+          failures.push(`${d.code} (lvl=${level}) → ${r.status()}: ${body}`)
         }
       } catch (e) {
-        return `${d.code} (lvl=${level}) → request error: ${String(e).slice(0, 160)}`
+        failures.push(`${d.code} (lvl=${level}) → request error: ${String(e).slice(0, 160)}`)
       }
-      return null
-    }
-    const failures = []
-    const CHUNK = 5
-    for (let i = 0; i < datasets.length; i += CHUNK) {
-      const slice = datasets.slice(i, i + CHUNK)
-      const results = await Promise.all(slice.map(probeDataset))
-      for (const f of results) if (f) failures.push(f)
     }
     expect(
       failures,
