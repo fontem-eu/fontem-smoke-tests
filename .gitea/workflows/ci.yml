@@ -81,6 +81,7 @@ jobs:
 
       - name: Bump cronjob image tags + commit + push
         env:
+          REG_USER: ${{ secrets.REGISTRY_USER }}
           REG_PASS: ${{ secrets.REGISTRY_PASSWORD }}
           TAG: ${{ steps.tag.outputs.value }}
         run: |
@@ -91,7 +92,10 @@ jobs:
               deployment/cronjob.yaml
           git config user.name "GMR CI"
           git config user.email "ci@void42.internal"
-          git remote set-url origin "http://oauth2:$REG_PASS@gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-smoke-tests.git"
+          # Authenticate as REGISTRY_USER (lucid). The earlier `oauth2:`
+          # username slot was rejected by main's push-whitelist, which
+          # only allows the lucid account.
+          git remote set-url origin "http://${REG_USER}:${REG_PASS}@gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-smoke-tests.git"
           if ! git diff --quiet; then
             # [skip ci] is belt-and-braces; paths-ignore on the trigger
             # is the primary loop guard.
