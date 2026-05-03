@@ -92,9 +92,14 @@ jobs:
               deployment/cronjob.yaml
           git config user.name "GMR CI"
           git config user.email "ci@void42.internal"
-          # Authenticate as REGISTRY_USER (lucid). The earlier `oauth2:`
-          # username slot was rejected by main's push-whitelist, which
-          # only allows the lucid account.
+          # actions/checkout writes an http.<base>.extraheader that
+          # authenticates as the per-task `gitea-actions` user, which
+          # is *not* in main's push-whitelist. Drop it so our explicit
+          # URL credentials (REGISTRY_USER=lucid) are what the server
+          # sees on push.
+          git config --local --unset-all \
+            "http.http://gitea-http.dev-tools.svc.cluster.local:3000/.extraheader" \
+            || true
           git remote set-url origin "http://${REG_USER}:${REG_PASS}@gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-smoke-tests.git"
           if ! git diff --quiet; then
             # [skip ci] is belt-and-braces; paths-ignore on the trigger
