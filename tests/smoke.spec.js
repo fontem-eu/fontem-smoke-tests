@@ -19,7 +19,7 @@ const TEST_PASSWORD = process.env.TEST_PASSWORD || 'TestPass123!'
 // `Date.now()` returns a number; calling `.slice()` on a number throws
 // — use the string form throughout.
 const RUN_ID = String(Date.now())
-const REPORT_TITLE = `Smoke Report ${RUN_ID}`
+const STORY_TITLE = `Smoke Story ${RUN_ID}`
 
 /**
  * Ensure the browser is in a logged-in state. Every test inherits the
@@ -52,7 +52,7 @@ async function clearSession(page) {
 }
 
 test.describe.serial('Production Smoke Tests', () => {
-  let reportId = null
+  let storyId = null
 
   // ── Authentication ─────────────────────────────────────────────
 
@@ -249,42 +249,42 @@ test.describe.serial('Production Smoke Tests', () => {
 
   // ── Report Lifecycle (all via UI) ──────────────────────────────
 
-  test('REPORT-09: Create report via UI', async ({ page }) => {
+  test('STORY-09: Create story via UI', async ({ page }) => {
     await uiLogin(page)
-    await page.goto('/my-reports')
-    await page.click('[data-testid="new-report-btn"]')
-    // Should navigate to /reports/<id>/edit. Generous timeout because
+    await page.goto('/my-stories')
+    await page.click('[data-testid="new-story-btn"]')
+    // Should navigate to /stories/<id>/edit. Generous timeout because
     // the create→redirect path is sometimes cold (first DB write of
     // the run, first cold-start of the editor route's bundle in the
     // page) and we've seen 15-20s legitimate completions on staging
     // under load. 10s was just below the natural worst case and
     // flaked the promote workflow regularly.
-    await page.waitForURL(/\/reports\/.*\/edit/, { timeout: 30_000 })
+    await page.waitForURL(/\/stories\/.*\/edit/, { timeout: 30_000 })
     // Extract report ID from URL
-    reportId = page.url().match(/\/reports\/([^/]+)\/edit/)?.[1]
-    expect(reportId).toBeTruthy()
+    storyId = page.url().match(/\/stories\/([^/]+)\/edit/)?.[1]
+    expect(storyId).toBeTruthy()
   })
 
-  test('REPORT-10: Edit report title and abstract', async ({ page }) => {
-    if (!reportId) test.skip()
+  test('STORY-10: Edit story title and abstract', async ({ page }) => {
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
-    await expect(page.locator('[data-testid="report-title-input"]')).toBeVisible({ timeout: 10_000 })
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="story-title-input"]')).toBeVisible({ timeout: 10_000 })
 
     // Set title
-    await page.fill('[data-testid="report-title-input"]', REPORT_TITLE)
+    await page.fill('[data-testid="story-title-input"]', STORY_TITLE)
     // Set abstract
-    await page.fill('[data-testid="report-abstract-input"]', 'Automated smoke test with widget validation')
+    await page.fill('[data-testid="story-abstract-input"]', 'Automated smoke test with widget validation')
     // Save
-    await page.click('[data-testid="save-report"]')
+    await page.click('[data-testid="save-story"]')
     // Wait for save to complete (button re-enables)
-    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 5_000 })
+    await expect(page.locator('[data-testid="save-story"]')).toBeEnabled({ timeout: 5_000 })
   })
 
-  test('REPORT-11: Add content to unified editor', async ({ page }) => {
-    if (!reportId) test.skip()
+  test('STORY-11: Add content to unified editor', async ({ page }) => {
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
     // Click into the TipTap editor and type content
@@ -296,30 +296,30 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.keyboard.type('This report covers Siemens AG public procurement contracts.')
 
     // Save
-    await page.click('[data-testid="save-report"]')
-    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 5_000 })
+    await page.click('[data-testid="save-story"]')
+    await expect(page.locator('[data-testid="save-story"]')).toBeEnabled({ timeout: 5_000 })
   })
 
-  test('REPORT-12: Report view renders content and title', async ({ page }) => {
-    if (!reportId) test.skip()
+  test('STORY-12: Story view renders content and title', async ({ page }) => {
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}`)
+    await page.goto(`/stories/${storyId}`)
     // 30s timeout: the read view fetches the report fresh and the
-    // edits from REPORT-10/11 sometimes haven't propagated to the
+    // edits from STORY-10/11 sometimes haven't propagated to the
     // read path yet (write→read consistency). 10s was just under
     // the natural settling time on staging and flaked promotes.
-    await expect(page.locator('[data-testid="report-title"]')).toContainText('Smoke Report', { timeout: 30_000 })
-    await expect(page.locator('[data-testid="report-abstract"]')).toContainText('widget validation', { timeout: 10_000 })
+    await expect(page.locator('[data-testid="story-title"]')).toContainText('Smoke Story', { timeout: 30_000 })
+    await expect(page.locator('[data-testid="story-abstract"]')).toContainText('widget validation', { timeout: 10_000 })
     // The report body should render (v2 uses read-only TipTap)
     await expect(page.locator('[data-testid="report-section-0"]')).toBeVisible({ timeout: 10_000 })
     // Content we typed should be present
     await expect(page.locator('[data-testid="report-section-0"]')).toContainText('Siemens')
   })
 
-  test('REPORT-13: Editor toolbar is visible', async ({ page }) => {
-    if (!reportId) test.skip()
+  test('STORY-13: Editor toolbar is visible', async ({ page }) => {
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     // Both `editor-toolbar` and `.tiptap-editor .tiptap` only render once the
     // TipTap editor instance finishes initializing (the template wraps them
     // in `v-if="editor"`). Cold-start init can take well over 10s under
@@ -329,24 +329,24 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('.tiptap-editor .tiptap')).toBeVisible({ timeout: 10_000 })
   })
 
-  test('REPORT-14: My Reports page shows the report', async ({ page }) => {
+  test('STORY-14: My Stories page shows the story', async ({ page }) => {
     await uiLogin(page)
-    // /reports redirects to /my-reports since the nav restructure
-    await page.goto('/my-reports')
-    await expect(page.locator('[data-testid="my-reports"]')).toBeVisible({ timeout: 10_000 })
+    // /reports redirects to /my-stories since the nav restructure
+    await page.goto('/my-stories')
+    await expect(page.locator('[data-testid="my-stories"]')).toBeVisible({ timeout: 10_000 })
     // Our smoke test report should be in the list. The title write
-    // from REPORT-10 sometimes propagates to the listing endpoint with
+    // from STORY-10 sometimes propagates to the listing endpoint with
     // a few-second lag (read-replica cache, list materialiser, etc.),
     // so we poll-then-assert with a reload fallback rather than a
     // tight 5s wait — that was the dominant flake source on staging.
-    const titleLocator = page.locator(`text=${REPORT_TITLE}`).first()
+    const titleLocator = page.locator(`text=${STORY_TITLE}`).first()
     try {
       await expect(titleLocator).toBeVisible({ timeout: 15_000 })
     } catch {
       // One reload — covers the case where the listing was rendered
       // before the new report appeared in the source query.
       await page.reload()
-      await expect(page.locator('[data-testid="my-reports"]')).toBeVisible({ timeout: 10_000 })
+      await expect(page.locator('[data-testid="my-stories"]')).toBeVisible({ timeout: 10_000 })
       await expect(titleLocator).toBeVisible({ timeout: 15_000 })
     }
   })
@@ -708,9 +708,9 @@ test.describe.serial('Production Smoke Tests', () => {
   // and we don't want the gate to flip on phrasing variance.
   test('ASSIST-19: Ask question via assistant panel and get response', async ({ page }) => {
     test.setTimeout(120_000)
-    if (!reportId) test.skip()
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
     // Open the assistant panel
@@ -731,9 +731,9 @@ test.describe.serial('Production Smoke Tests', () => {
 
   test('ASSIST-20: Assistant proposes edit, user applies it, content lands in editor', async ({ page }) => {
     test.setTimeout(180_000)
-    if (!reportId) test.skip()
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
     // Open assistant panel
@@ -765,9 +765,9 @@ test.describe.serial('Production Smoke Tests', () => {
 
   test('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
     test.setTimeout(120_000)
-    if (!reportId) test.skip()
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
     // Open assistant panel
@@ -811,9 +811,9 @@ test.describe.serial('Production Smoke Tests', () => {
 
   test('ASSIST-22: Authority investigation dispatches correctly (no wrong-tool dead-end)', async ({ page }) => {
     test.setTimeout(180_000)
-    if (!reportId) test.skip()
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
     await page.click('[data-testid="assist-toggle"]')
@@ -841,9 +841,9 @@ test.describe.serial('Production Smoke Tests', () => {
 
   test('ASSIST-23: Assistant grounds numeric claims in actual graph data', async ({ page }) => {
     test.setTimeout(180_000)
-    if (!reportId) test.skip()
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
     await page.click('[data-testid="assist-toggle"]')
@@ -871,9 +871,9 @@ test.describe.serial('Production Smoke Tests', () => {
 
   test('ASSIST-24: Assistant cites concrete data coverage when asked', async ({ page }) => {
     test.setTimeout(180_000)
-    if (!reportId) test.skip()
+    if (!storyId) test.skip()
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
     await page.click('[data-testid="assist-toggle"]')
@@ -914,14 +914,14 @@ test.describe.serial('Production Smoke Tests', () => {
 
     // Use a fresh report so this test doesn't fight ASSIST-20's
     // editor state (and so it can run in isolation in dev too).
-    await page.goto('/my-reports')
-    await page.click('[data-testid="new-report-btn"]')
-    await page.waitForURL(/\/reports\/.*\/edit/, { timeout: 15_000 })
-    const localReportId = page.url().match(/\/reports\/([^/]+)\/edit/)?.[1]
+    await page.goto('/my-stories')
+    await page.click('[data-testid="new-story-btn"]')
+    await page.waitForURL(/\/stories\/.*\/edit/, { timeout: 15_000 })
+    const localReportId = page.url().match(/\/stories\/([^/]+)\/edit/)?.[1]
     expect(localReportId).toBeTruthy()
 
     // Set a title so the report has something the user could find again.
-    await page.fill('[data-testid="report-title-input"]', `Smoke Round-Trip ${RUN_ID.slice(0, 8)}`)
+    await page.fill('[data-testid="story-title-input"]', `Smoke Round-Trip ${RUN_ID.slice(0, 8)}`)
 
     // Open assistant.
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
@@ -956,8 +956,8 @@ test.describe.serial('Production Smoke Tests', () => {
     // The fix auto-saves on apply, so the user shouldn't have to click
     // Save themselves. Click anyway — it's idempotent and proves the
     // explicit save still works.
-    await page.click('[data-testid="save-report"]')
-    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 10_000 })
+    await page.click('[data-testid="save-story"]')
+    await expect(page.locator('[data-testid="save-story"]')).toBeEnabled({ timeout: 10_000 })
 
     // The real persistence check: reload the page (full reset of the
     // editor, fresh fetch from the API) and confirm the marker survives.
@@ -974,12 +974,12 @@ test.describe.serial('Production Smoke Tests', () => {
     await editor.click()
     await page.keyboard.press('End')
     await page.keyboard.type(' ✓')
-    await page.click('[data-testid="save-report"]')
-    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 10_000 })
+    await page.click('[data-testid="save-story"]')
+    await expect(page.locator('[data-testid="save-story"]')).toBeEnabled({ timeout: 10_000 })
 
     // Cleanup — don't accumulate round-trip reports across runs.
     const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
-    await page.request.delete(`/capi/reports/${localReportId}`, {
+    await page.request.delete(`/capi/stories/${localReportId}`, {
       headers: { Authorization: `Bearer ${token}` },
     }).catch(() => {})
   })
@@ -992,31 +992,31 @@ test.describe.serial('Production Smoke Tests', () => {
   // had already been fixed; this test pins the frontend half so a
   // future router change can't quietly re-introduce the dead-end.
 
-  test('PUBLIC-1: public_open report is viewable by an anonymous visitor', async ({ page, context }) => {
+  test('PUBLIC-1: public_open story is viewable by an anonymous visitor', async ({ page, context }) => {
     test.setTimeout(120_000)
-    if (!reportId) test.skip()
+    if (!storyId) test.skip()
 
     // Make the report public_open as the authenticated user, then
     // drop the session and prove an anonymous visit succeeds.
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="visibility-select"]')).toBeVisible({ timeout: 10_000 })
     await page.selectOption('[data-testid="visibility-select"]', 'public_open')
-    await page.click('[data-testid="save-report"]')
-    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 10_000 })
+    await page.click('[data-testid="save-story"]')
+    await expect(page.locator('[data-testid="save-story"]')).toBeEnabled({ timeout: 10_000 })
 
     // Drop the session (token + cookies) and revisit as a stranger.
     await page.evaluate(() => localStorage.clear())
     await context.clearCookies()
 
-    await page.goto(`/reports/${reportId}`)
+    await page.goto(`/stories/${storyId}`)
 
     // Two failure modes pre-fix:
     //   - hard redirect to /login (router gate)
     //   - blank page that hydrates and *then* redirects to /login
     // We assert the URL stays put AND the report renders.
-    await expect(page).toHaveURL(new RegExp(`/reports/${reportId}$`), { timeout: 10_000 })
-    await expect(page.locator('[data-testid="report-title"]')).toBeVisible({ timeout: 10_000 })
+    await expect(page).toHaveURL(new RegExp(`/stories/${storyId}$`), { timeout: 10_000 })
+    await expect(page.locator('[data-testid="story-title"]')).toBeVisible({ timeout: 10_000 })
 
     // Sanity check: no login form lurking on the page (would mean we
     // landed on /login without changing the URL bar).
@@ -1025,10 +1025,10 @@ test.describe.serial('Production Smoke Tests', () => {
     // Restore the report's visibility so subsequent runs aren't
     // looking at a leftover public_open report.
     await uiLogin(page)
-    await page.goto(`/reports/${reportId}/edit`)
+    await page.goto(`/stories/${storyId}/edit`)
     await page.selectOption('[data-testid="visibility-select"]', 'private')
-    await page.click('[data-testid="save-report"]')
-    await expect(page.locator('[data-testid="save-report"]')).toBeEnabled({ timeout: 10_000 })
+    await page.click('[data-testid="save-story"]')
+    await expect(page.locator('[data-testid="save-story"]')).toBeEnabled({ timeout: 10_000 })
   })
 
   // ── Consolidation visibility gate ────────────────────────────────
@@ -1097,12 +1097,12 @@ test.describe.serial('Production Smoke Tests', () => {
 
   // ── Cleanup ────────────────────────────────────────────────────
 
-  test('CLEANUP-21: Delete test report via UI', async ({ page }) => {
-    if (!reportId) test.skip()
+  test('CLEANUP-21: Delete test story via UI', async ({ page }) => {
+    if (!storyId) test.skip()
     await uiLogin(page)
     // Navigate to the report and delete it via the API (no delete UI button in view)
     const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
-    const resp = await page.request.delete(`/capi/reports/${reportId}`, {
+    const resp = await page.request.delete(`/capi/stories/${storyId}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     expect([204, 404]).toContain(resp.status())
