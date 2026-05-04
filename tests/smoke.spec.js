@@ -329,6 +329,65 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('.tiptap-editor .tiptap')).toBeVisible({ timeout: 10_000 })
   })
 
+  test('STORY-MENTION-1: @-typing inserts an entity chip + chip click opens the side panel', async ({ page }) => {
+    test.setTimeout(120_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 30_000 })
+
+    // Click into the editor and trigger an @-mention.
+    const editor = page.locator('.tiptap-editor .tiptap')
+    await editor.click()
+    await page.keyboard.press('End')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('Mentioned in this paragraph: @Siemens')
+
+    // Autocomplete popover should surface at least one Company hit.
+    const popover = page.locator('[data-testid="mention-popover"]')
+    await expect(popover).toBeVisible({ timeout: 10_000 })
+    const firstSuggestion = page.locator('[data-testid="mention-suggestion-0"]')
+    await expect(firstSuggestion).toBeVisible({ timeout: 5_000 })
+    await firstSuggestion.click()
+
+    // The chip lives inside the editor and exposes its IRI as a data
+    // attribute. Use that as the load-bearing assertion (selector is
+    // stable; the visible label changes per environment).
+    const chip = editor.locator('[data-entity-iri^="http://data.fontem.eu/id/Company/"]').first()
+    await expect(chip).toBeVisible({ timeout: 10_000 })
+
+    // Save so the chip persists past a reload.
+    await page.click('[data-testid="save-story"]')
+    await expect(page.locator('[data-testid="save-story"]')).toBeEnabled({ timeout: 10_000 })
+
+    // Click the chip → side panel slides in with the entity facts.
+    await chip.click()
+    await expect(page.locator('[data-testid="entity-side-panel"]')).toBeVisible({ timeout: 10_000 })
+    // Resolver returned a label (could be any Siemens hit — assert on
+    // non-empty rather than a specific name to avoid environment drift).
+    const label = page.locator('[data-testid="entity-side-panel-label"]')
+    await expect(label).not.toBeEmpty({ timeout: 5_000 })
+
+    // Closing the panel removes it from the DOM so the next test
+    // doesn't inherit an open overlay.
+    await page.click('[data-testid="entity-side-panel-close"]')
+    await expect(page.locator('[data-testid="entity-side-panel"]')).toBeHidden({ timeout: 5_000 })
+  })
+
+  test('STORY-MENTION-2: chip survives reload + opens panel from the read view', async ({ page }) => {
+    test.setTimeout(60_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}`)
+
+    // The chip from STORY-MENTION-1 must round-trip through save.
+    const chip = page.locator('[data-entity-iri^="http://data.fontem.eu/id/Company/"]').first()
+    await expect(chip).toBeVisible({ timeout: 30_000 })
+
+    await chip.click()
+    await expect(page.locator('[data-testid="entity-side-panel"]')).toBeVisible({ timeout: 10_000 })
+  })
+
   test('STORY-14: My Stories page shows the story', async ({ page }) => {
     await uiLogin(page)
     // /reports redirects to /my-stories since the nav restructure
