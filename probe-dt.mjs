@@ -1,0 +1,10 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch({ headless: true, executablePath: '/config/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome', args: ['--ignore-certificate-errors','--no-sandbox'] });
+const ctx = await b.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1600, height: 1000 } });
+const page = await ctx.newPage();
+page.on('response', r => { if (r.status() >= 400) console.log('HTTP', r.status(), r.url()); });
+await page.goto('https://dtrack.void42.internal/login', { waitUntil: 'networkidle', timeout: 30000 });
+await page.waitForTimeout(4000);
+const buttons = await page.evaluate(() => Array.from(document.querySelectorAll('a, button')).map(e => `${e.tagName} text="${(e.innerText||'').trim().slice(0,40)}" href="${e.href||''}"`).filter(s => s.length > 30));
+console.log(buttons.join('\n'));
+await b.close();

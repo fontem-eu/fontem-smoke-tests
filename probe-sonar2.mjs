@@ -1,0 +1,12 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch({ headless: true, executablePath: '/config/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome', args: ['--ignore-certificate-errors','--no-sandbox'] });
+const ctx = await b.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1600, height: 1000 } });
+const page = await ctx.newPage();
+page.on('response', r => { if (r.status() >= 400 && r.url().includes('sonarqube')) console.log('HTTP', r.status(), r.url()); });
+await page.goto('https://sonarqube.void42.internal/sessions/new?return_to=%2F', { waitUntil: 'networkidle' });
+await page.waitForTimeout(5000);
+const txt = await page.locator('body').innerText().catch(()=>'');
+console.log('TEXT:', txt.slice(0, 600).replace(/\n/g, ' | '));
+const links = await page.evaluate(() => Array.from(document.querySelectorAll('a, button')).map(e => `${e.tagName} text="${(e.innerText||'').trim().slice(0,40)}"`));
+console.log(links.join('\n'));
+await b.close();

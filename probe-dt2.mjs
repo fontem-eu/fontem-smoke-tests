@@ -1,0 +1,15 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch({ headless: true, executablePath: '/config/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome', args: ['--ignore-certificate-errors','--no-sandbox'] });
+const ctx = await b.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1600, height: 1000 } });
+const page = await ctx.newPage();
+page.on('console', m => console.log('[console.'+m.type()+']', m.text().slice(0,200)));
+page.on('pageerror', e => console.log('[pageerror]', e.message));
+page.on('response', r => { if (r.status() >= 400) console.log('HTTP', r.status(), r.url()); });
+page.on('request', r => { if (r.url().includes('auth.void42') || r.url().includes('authorize')) console.log('REQ', r.method(), r.url()); });
+await page.goto('https://dtrack.void42.internal/login', { waitUntil: 'networkidle', timeout: 30000 });
+await page.waitForTimeout(2000);
+const btn = await page.locator('button:has-text("Sign in with Authentik")').first();
+await btn.click();
+await page.waitForTimeout(5000);
+console.log('FINAL URL:', page.url());
+await b.close();
