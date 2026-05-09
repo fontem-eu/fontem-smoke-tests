@@ -23,8 +23,8 @@ NAMESPACE="gmr-dast"
 # scan — exactly what real users hit. The smoke tests' playwright
 # config already skips cert validation for *.void42.internal (private
 # PKI), so self-signed internal certs aren't a blocker.
-TARGET_URL="https://gmr-dast.void42.internal"
-TARGET_CAPI="https://gmr-dast.void42.internal/capi"
+TARGET_URL="https://fontem.dast.void42.internal"
+TARGET_CAPI="https://fontem.dast.void42.internal/capi"
 ZAP_SERVICE="zap.${NAMESPACE}.svc.cluster.local:8080"
 BOOKSTACK_URL="http://bookstack.bookstack.svc.cluster.local"
 RUN_ID="run_$(date -u +%Y%m%d_%H%M)"
@@ -105,14 +105,14 @@ curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
 # ── Phase 3: Passive scan — e2e + smoke tests through ZAP ──
 log "Running e2e tests through ZAP proxy (passive scan)..."
 cd "$WEB_REPO"
-BASE_URL="https://gmr-dast.void42.internal" \
+BASE_URL="https://fontem.dast.void42.internal" \
     npx playwright test --project=chromium \
     --config=playwright.config.js \
     --grep-invert "ASSIST" 2>&1 | tail -5 || true
 
 log "Running smoke tests through ZAP proxy (passive scan)..."
 cd "$SMOKE_REPO"
-BASE_URL="https://gmr-dast.void42.internal" \
+BASE_URL="https://fontem.dast.void42.internal" \
     npx playwright test --project=chromium \
     --grep-invert "ASSIST" 2>&1 | tail -5 || true
 
