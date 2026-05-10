@@ -152,10 +152,19 @@ if command -v schemathesis >/dev/null 2>&1; then
         # property testing. --tls-verify=false because the dast env
         # serves TLS via the void42 private CA that Python's requests
         # store doesn't trust by default.
+        #
+        # --rate-limit 1/s stays under nginx.conf's `limit_req zone=
+        # sustained rate=1r/s` on the /capi/ proxy. Without it, schemathesis
+        # rapid-fires 1000+ requests in seconds and the rate limiter fires
+        # a 429 before the auth/validation checks run — making every
+        # "API accepts requests without authentication" finding bogus
+        # noise (the request never reached the auth layer). Slows the
+        # run from ~40 s to ~20 min but produces signal we can act on.
         schemathesis run \
             --tls-verify=false \
             --url "${TARGET_CAPI}" \
             --max-examples=20 \
+            --rate-limit 1/s \
             --header "Authorization: Bearer ${FUZZ_JWT}" \
             --report junit \
             --report-junit-path /tmp/schemathesis.xml \
