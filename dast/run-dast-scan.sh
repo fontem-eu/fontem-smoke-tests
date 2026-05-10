@@ -126,57 +126,6 @@ while true; do
 done
 log "Passive scan complete"
 
-# ── Phase 3.5: Schemathesis API fuzzing ─────────────────────
-# Property-based fuzzing of /capi/openapi.json using the fuzz user
-# (narrower privileges than researcher — can't trigger destructive
-# mutations even if Schemathesis generates inputs that try).
-# Install Schemathesis into the user site if the binary isn't already
-# available. --break-system-packages because the runner base image
-# uses PEP 668 (externally-managed-environment); --user keeps us out
-# of /usr/lib and avoids needing root.
-if ! command -v schemathesis >/dev/null 2>&1; then
-    pip install --user --break-system-packages --quiet schemathesis || true
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-
-if command -v schemathesis >/dev/null 2>&1; then
-    log "Authenticating fuzz user..."
-    FUZZ_JWT=$(curl -sf -k -X POST "${TARGET_CAPI}/auth/login" \
-        -H "Content-Type: application/json" \
-        -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!"}' \
-        | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))")
-    if [ -n "$FUZZ_JWT" ]; then
-        log "Running Schemathesis fuzz against ${TARGET_CAPI}/openapi.json..."
-        # --max-examples 20 keeps each endpoint's hypothesis search to
-        # ~20 generated inputs — smoke-style fuzz, not exhaustive
-        # property testing. --tls-verify=false because the dast env
-        # serves TLS via the void42 private CA that Python's requests
-        # store doesn't trust by default.
-        #
-        # --rate-limit 1/s stays under nginx.conf's `limit_req zone=
-        # sustained rate=1r/s` on the /capi/ proxy. Without it, schemathesis
-        # rapid-fires 1000+ requests in seconds and the rate limiter fires
-        # a 429 before the auth/validation checks run — making every
-        # "API accepts requests without authentication" finding bogus
-        # noise (the request never reached the auth layer). Slows the
-        # run from ~40 s to ~20 min but produces signal we can act on.
-        schemathesis run \
-            --tls-verify=false \
-            --url "${TARGET_CAPI}" \
-            --max-examples=20 \
-            --rate-limit 1/s \
-            --header "Authorization: Bearer ${FUZZ_JWT}" \
-            --report junit \
-            --report-junit-path /tmp/schemathesis.xml \
-            "${TARGET_CAPI}/openapi.json" 2>&1 | tail -40 || true
-        log "Schemathesis complete — report at /tmp/schemathesis.xml"
-    else
-        log "Fuzz user auth failed; skipping Schemathesis"
-    fi
-else
-    log "Schemathesis install failed; skipping (pip --break-system-packages not allowed?)"
-fi
-
 # ── Phase 4: Active scan ────────────────────────────────────
 log "Starting active scan against $TARGET_CAPI"
 SCAN_ID=$(curl -sf "http://${ZAP_SERVICE}/JSON/ascan/action/scan/?url=${TARGET_CAPI}&recurse=true&inScopeOnly=false" | python3 -c "import json,sys;print(json.load(sys.stdin)['scan'])")
@@ -214,5 +163,54 @@ BOOKSTACK_TOKEN_SECRET="$BOOKSTACK_TOKEN_SECRET" \
         "$RUN_ID" \
         "$TARGET_CAPI"
 
-log "Done!"
+log "ZAP phases complete — report uploaded to BookStack"
 rm -f "$REPORT_FILE"
+
+# ── Phase 7: Schemathesis API fuzzing ───────────────────────
+# Runs LAST and intentionally outside the ZAP critical path.
+# Property-based fuzz of /capi/openapi.json using the fuzz user
+# (narrower privileges than researcher — can't trigger destructive
+# mutations even if Schemathesis generates inputs that try).
+#
+# Pulled out of the ZAP critical path on 2026-05-10: with `--rate-limit
+# 1/s` (pinned under nginx.conf's `limit_req sustained=1r/s` on /capi/)
+# the fuzz takes ~95 min for the current ~5,000-case surface, exceeding
+# even the bumped 7,200 s ZAP daemon deadline if the active scan also
+# runs after. Doing schemathesis last lets the ZAP daemon die naturally
+# while we keep generating signal.
+if ! command -v schemathesis >/dev/null 2>&1; then
+    pip install --user --break-system-packages --quiet schemathesis || true
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+if command -v schemathesis >/dev/null 2>&1; then
+    log "Authenticating fuzz user..."
+    FUZZ_JWT=$(curl -sf -k -X POST "${TARGET_CAPI}/auth/login" \
+        -H "Content-Type: application/json" \
+        -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!"}' \
+        | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))")
+    if [ -n "$FUZZ_JWT" ]; then
+        log "Running Schemathesis fuzz against ${TARGET_CAPI}/openapi.json..."
+        # --max-examples 20 keeps each endpoint's hypothesis search to
+        # ~20 generated inputs — smoke-style fuzz, not exhaustive
+        # property testing. --tls-verify=false because the dast env
+        # serves TLS via the void42 private CA that Python's requests
+        # store doesn't trust by default.
+        schemathesis run \
+            --tls-verify=false \
+            --url "${TARGET_CAPI}" \
+            --max-examples=20 \
+            --rate-limit 1/s \
+            --header "Authorization: Bearer ${FUZZ_JWT}" \
+            --report junit \
+            --report-junit-path /tmp/schemathesis.xml \
+            "${TARGET_CAPI}/openapi.json" 2>&1 | tail -40 || true
+        log "Schemathesis complete — report at /tmp/schemathesis.xml"
+    else
+        log "Fuzz user auth failed; skipping Schemathesis"
+    fi
+else
+    log "Schemathesis install failed; skipping (pip --break-system-packages not allowed?)"
+fi
+
+log "Done!"

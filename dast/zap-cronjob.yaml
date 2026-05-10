@@ -43,7 +43,14 @@ spec:
   failedJobsHistoryLimit: 5
   jobTemplate:
     spec:
-      activeDeadlineSeconds: 3600   # 1 hour hard limit
+      # 2 h ceiling — schemathesis runs at 1 req/s (since gmr-smoke-tests
+      # PR #74 to stay under the /capi/ rate limiter) and chews through
+      # ~5,000 generated cases over ~95 min on the current API surface.
+      # The 1-hour ceiling tripped on 2026-05-10 mid-run, killed the ZAP
+      # daemon before the active-scan phase landed, and lost the BookStack
+      # report. 2 h leaves headroom for a few more endpoints worth of
+      # surface growth without hitting the wall.
+      activeDeadlineSeconds: 7200
       backoffLimit: 0
       template:
         spec:
