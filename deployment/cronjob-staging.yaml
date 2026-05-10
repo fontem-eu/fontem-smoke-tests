@@ -1,19 +1,21 @@
 ---
-# Smoke tests against STAGING (gmr-staging.void42.internal).
+# Smoke tests against the testing env (fontem.testing.void42.internal,
+# k8s ns gmr-staging — the ns name is legacy from before the env-rename;
+# kept to avoid migrating community-api Postgres + Neo4j PV bindings).
 #
-# The schedule is SUSPENDED — staging only runs smoke tests as a pre-promotion
-# gate, not on a periodic cadence (periodic smoke monitoring lives in prod).
-# The CronJob exists purely as a template for the gitops promote workflow,
-# which invokes it via `kubectl create job --from=cronjob/gmr-smoke-tests-staging`
-# before every prod promotion. Failures here block prod promotion.
+# The schedule is SUSPENDED — testing only runs smoke tests as a
+# pre-promotion gate, not on a periodic cadence. The CronJob exists
+# purely as a template for the gitops promote workflow, which invokes
+# it via `kubectl create job --from=cronjob/gmr-smoke-tests-testing`
+# before every staging+dast promotion. Failures here block promotion.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: gmr-smoke-tests-staging
+  name: gmr-smoke-tests-testing
   namespace: gmr-staging
   labels:
     app: gmr-smoke-tests
-    environment: staging
+    environment: testing
 spec:
   schedule: "0 * * * *"
   suspend: true
@@ -28,7 +30,7 @@ spec:
         metadata:
           labels:
             app: gmr-smoke-tests
-            environment: staging
+            environment: testing
           annotations:
             linkerd.io/inject: disabled
         spec:
@@ -40,7 +42,7 @@ spec:
               image: contribute.void42.internal/golden/gmr-smoke-tests:vf7c4004
               env:
                 - name: BASE_URL
-                  value: "https://gmr-staging.void42.internal"
+                  value: "https://fontem.testing.void42.internal"
                 - name: TEST_EMAIL
                   valueFrom: { secretKeyRef: { name: gmr-smoke-creds, key: email } }
                 - name: TEST_PASSWORD
