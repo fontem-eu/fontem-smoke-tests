@@ -185,10 +185,22 @@ fi
 
 if command -v schemathesis >/dev/null 2>&1; then
     log "Authenticating fuzz user..."
-    FUZZ_JWT=$(curl -sf -k -X POST "${TARGET_CAPI}/auth/login" \
+    # Robust auth: capture status code + body separately so a stale
+    # password or a temporarily-down /capi doesn't crash the whole
+    # script via `set -e` + pipefail when python3 tries to parse a
+    # non-JSON body (the failure mode on 2026-05-10's run, where the
+    # fuzz user's password had drifted and curl returned a 401 body
+    # that python's json.load couldn't read).
+    LOGIN_BODY=$(mktemp); LOGIN_CODE=$(mktemp)
+    HTTP=$(curl -sk -o "$LOGIN_BODY" -w "%{http_code}" \
+        -X POST "${TARGET_CAPI}/auth/login" \
         -H "Content-Type: application/json" \
-        -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!"}' \
-        | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))")
+        -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!"}')
+    FUZZ_JWT=""
+    if [ "$HTTP" = "200" ]; then
+        FUZZ_JWT=$(python3 -c "import json,sys; print(json.load(open('$LOGIN_BODY')).get('access_token',''))" 2>/dev/null || true)
+    fi
+    rm -f "$LOGIN_BODY" "$LOGIN_CODE"
     if [ -n "$FUZZ_JWT" ]; then
         log "Running Schemathesis fuzz against ${TARGET_CAPI}/openapi.json..."
         # --max-examples 20 keeps each endpoint's hypothesis search to
@@ -207,7 +219,13 @@ if command -v schemathesis >/dev/null 2>&1; then
             "${TARGET_CAPI}/openapi.json" 2>&1 | tail -40 || true
         log "Schemathesis complete — report at /tmp/schemathesis.xml"
     else
-        log "Fuzz user auth failed; skipping Schemathesis"
+        log "Fuzz user auth failed (HTTP $HTTP) — skipping Schemathesis."
+        log "  Likely the fuzz user's password has drifted from"
+        log "  FuzzPass123!. Reset via:"
+        log "    kubectl exec -n gmr-dast deploy/postgresql -- psql -U postgres \\"
+        log "      -d gmr_app -c \"UPDATE users SET password_hash='<bcrypt>',"
+        log "      failed_login_attempts=0, locked_until=NULL"
+        log "      WHERE email='fuzz@gmr.test';\""
     fi
 else
     log "Schemathesis install failed; skipping (pip --break-system-packages not allowed?)"
