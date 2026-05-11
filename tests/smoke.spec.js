@@ -75,8 +75,13 @@ test.describe.serial('Production Smoke Tests', () => {
 
   test('AUTH-03: Profile menu shows sign-out', async ({ page }) => {
     await uiLogin(page)
-    await page.click('[data-testid="profile-menu-trigger"]')
-    await expect(page.locator('[data-testid="sign-out-btn"]')).toBeVisible()
+    // The "Public Spending" header refactor merged the standalone
+    // ProfileDropdown into PreferencesMenu — the old testids
+    // (`profile-menu-trigger`, `sign-out-btn`) are gone. Signed-in
+    // users get an avatar button that opens the unified prefs menu,
+    // and the sign-out row is on `prefs-sign-out`.
+    await page.click('[data-testid="prefs-avatar-trigger"]')
+    await expect(page.locator('[data-testid="prefs-sign-out"]')).toBeVisible()
   })
 
   // ── Search & Browse ────────────────────────────────────────────
