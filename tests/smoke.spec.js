@@ -579,9 +579,15 @@ test.describe.serial('Production Smoke Tests', () => {
 
     // Backend hit may be a few hundred ms; the URL should carry the
     // dataset code we picked AND a nuts_level (the choropleth query).
+    // 30s budget rather than 15s — the first dataset alphabetically
+    // is a migration table that legitimately spends ~15-25s on the
+    // initial query against a cold cache (the per-dataset materialised
+    // views aren't all hot in staging). Bumped after the smoke suite
+    // started flaking on it intermittently — better to wait than to
+    // skip a dataset because it picked the slow one to probe.
     await page.waitForResponse(
       (r) => r.url().includes('/api/atlas/series') && r.status() === 200,
-      { timeout: 15_000 },
+      { timeout: 30_000 },
     )
     expect(seriesUrl, 'no /api/atlas/series request was issued').toBeTruthy()
     expect(seriesUrl).toContain(`dataset=${firstReal}`)
@@ -632,7 +638,14 @@ test.describe.serial('Production Smoke Tests', () => {
       const url = `/api/atlas/series?dataset=${encodeURIComponent(d.code)}` +
                   `&nuts_level=${level}&start=${recentYear}`
       try {
-        const r = await request.get(url, { timeout: 20_000 })
+        // Per-request timeout bumped 20s → 60s for the two migration
+        // tables (migr_asyappctzm, migr_asydcfsta) — wide aggregations
+        // against an uncached materialised view legitimately spend ~30s
+        // before the row data lands. A timeout there would fail the
+        // gate even though the dataset isn't actually broken. The
+        // total-suite timeout (180s set at the test top) still bounds
+        // the whole loop.
+        const r = await request.get(url, { timeout: 60_000 })
         if (r.status() >= 400) {
           const body = (await r.text()).slice(0, 160)
           failures.push(`${d.code} (lvl=${level}) → ${r.status()}: ${body}`)
