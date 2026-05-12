@@ -118,11 +118,21 @@ test.describe.serial('Production Smoke Tests', () => {
     await searchInput.fill('Siemens AG')
     await expect(page.locator('.gmr-card').first()).toBeVisible({ timeout: 10_000 })
     await page.locator('.gmr-card').first().click()
-    await page.waitForTimeout(1000)
-    const graphLink = page.locator('a[href*="graph"], button:has-text("Graph"), [data-testid="view-graph"]').first()
-    if (await graphLink.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await graphLink.click()
-    }
+    // Card click navigates to /c/<uuid>/profile (the Overview group's
+    // default view). Wait for the DataViewSelector to mount before
+    // looking for the Graph Explorer tab — under load the SPA can
+    // need >1s to settle.
+    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 10_000 })
+    // Click the Graph Explorer tab. The SPA's testid is
+    // `view-opt-graph` (per the grouped DataViewSelector — was
+    // `view-graph` in the pre-grouping layout the original test
+    // assumed). Keep the legacy testid + the has-text fallback so
+    // the test survives the next rename.
+    const graphTab = page.locator(
+      '[data-testid="view-opt-graph"], [data-testid="view-graph"], button:has-text("Graph Explorer")',
+    ).first()
+    await expect(graphTab).toBeVisible({ timeout: 5_000 })
+    await graphTab.click()
     // The ge-canvas wrapper mounts immediately but stays
     // `display: none` until the first frame paints. Waiting for the
     // *visible* state can timeout under load even though the graph
