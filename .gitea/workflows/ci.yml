@@ -45,7 +45,7 @@ jobs:
         uses: ./.fontem-ci/actions/sbom-generate
         with:
           language: node
-          project-name: gmr-smoke-tests
+          project-name: fontem-smoke-tests
           project-version: ${{ github.sha }}
           dtrack-key: ${{ secrets.DTRACK_API_KEY }}
 
@@ -53,15 +53,15 @@ jobs:
         name: Build, push, sign, attest
         uses: ./.fontem-ci/actions/docker-build-sign
         with:
-          image: contribute.void42.internal/fontem/gmr-smoke-tests
+          image: contribute.void42.internal/fontem/fontem-smoke-tests
           cosign-key: ${{ secrets.COSIGN_KEY }}
           registry-user: ${{ secrets.REGISTRY_USER }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
           sbom-path: ${{ steps.sbom.outputs.sbom-path }}
 
   # The whole deploy is now just: sed the cronjob manifests, commit,
-  # push. ArgoCD apps in the gitops repo (gmr-smoke-tests-staging /
-  # gmr-smoke-tests-prod) watch `deployment/cronjob-staging.yaml` and
+  # push. ArgoCD apps in the gitops repo (fontem-smoke-tests-staging /
+  # fontem-smoke-tests-prod) watch `deployment/cronjob-staging.yaml` and
   # `deployment/cronjob.yaml` here and pick up the bump automatically.
   #
   # No kubectl needed — no PROMOTE_KUBECONFIG dependency.
@@ -85,9 +85,9 @@ jobs:
           REG_PASS: ${{ secrets.REGISTRY_PASSWORD }}
           TAG: ${{ steps.tag.outputs.value }}
         run: |
-          # Match gmr-smoke-tests:<anything-but-space> — guards against
+          # Match fontem-smoke-tests:<anything-but-space> — guards against
           # the tag format widening eating surrounding YAML.
-          sed -i "s|gmr-smoke-tests:[A-Za-z0-9.-]*|gmr-smoke-tests:$TAG|" \
+          sed -i "s|fontem-smoke-tests:[A-Za-z0-9.-]*|fontem-smoke-tests:$TAG|" \
               deployment/cronjob-staging.yaml \
               deployment/cronjob.yaml
           git config user.name "GMR CI"

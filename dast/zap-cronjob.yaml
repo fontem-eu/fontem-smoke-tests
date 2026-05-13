@@ -43,7 +43,7 @@ spec:
   failedJobsHistoryLimit: 5
   jobTemplate:
     spec:
-      # 2 h ceiling — schemathesis runs at 1 req/s (since gmr-smoke-tests
+      # 2 h ceiling — schemathesis runs at 1 req/s (since fontem-smoke-tests
       # PR #74 to stay under the /capi/ rate limiter) and chews through
       # ~5,000 generated cases over ~95 min on the current API surface.
       # The 1-hour ceiling tripped on 2026-05-10 mid-run, killed the ZAP

@@ -5,7 +5,7 @@
  * with the browser, no direct API calls.
  *
  * Cadence:
- *   - prod: hourly via the gmr-smoke-tests CronJob (deployment/cronjob.yaml)
+ *   - prod: hourly via the fontem-smoke-tests CronJob (deployment/cronjob.yaml)
  *   - staging: same CronJob spec but suspended; invoked on demand by
  *     the gitops promote workflow as a pre-prod gate
  *

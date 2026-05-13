@@ -3,10 +3,10 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: gmr-smoke-tests-prod
+  name: fontem-smoke-tests-prod
   namespace: gmr
   labels:
-    app: gmr-smoke-tests
+    app: fontem-smoke-tests
     environment: prod
 spec:
   schedule: "0 */8 * * *"
@@ -20,7 +20,7 @@ spec:
       template:
         metadata:
           labels:
-            app: gmr-smoke-tests
+            app: fontem-smoke-tests
             environment: prod
           annotations:
             linkerd.io/inject: disabled
@@ -30,7 +30,7 @@ spec:
             - name: regcred
           containers:
             - name: smoke
-              image: contribute.void42.internal/fontem/gmr-smoke-tests:v0b7e12c
+              image: contribute.void42.internal/fontem/fontem-smoke-tests:v0b7e12c
               env:
                 - name: BASE_URL
                   value: "https://gmr.void42.net"

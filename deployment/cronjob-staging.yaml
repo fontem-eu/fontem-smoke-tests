@@ -6,15 +6,15 @@
 # The schedule is SUSPENDED — testing only runs smoke tests as a
 # pre-promotion gate, not on a periodic cadence. The CronJob exists
 # purely as a template for the gitops promote workflow, which invokes
-# it via `kubectl create job --from=cronjob/gmr-smoke-tests-testing`
+# it via `kubectl create job --from=cronjob/fontem-smoke-tests-testing`
 # before every staging+dast promotion. Failures here block promotion.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: gmr-smoke-tests-testing
+  name: fontem-smoke-tests-testing
   namespace: gmr-staging
   labels:
-    app: gmr-smoke-tests
+    app: fontem-smoke-tests
     environment: testing
 spec:
   schedule: "0 * * * *"
@@ -29,7 +29,7 @@ spec:
       template:
         metadata:
           labels:
-            app: gmr-smoke-tests
+            app: fontem-smoke-tests
             environment: testing
           annotations:
             linkerd.io/inject: disabled
@@ -39,7 +39,7 @@ spec:
             - name: regcred
           containers:
             - name: smoke
-              image: contribute.void42.internal/fontem/gmr-smoke-tests:v0b7e12c
+              image: contribute.void42.internal/fontem/fontem-smoke-tests:v0b7e12c
               env:
                 - name: BASE_URL
                   value: "https://fontem.testing.void42.internal"
