@@ -12,7 +12,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: fontem-smoke-tests-testing
-  namespace: gmr-staging
+  # namespace: set by Argo Application destination
   labels:
     app: fontem-smoke-tests
     environment: testing

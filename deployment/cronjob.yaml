@@ -4,7 +4,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: fontem-smoke-tests-prod
-  namespace: gmr
+  # namespace: set by Argo Application destination
   labels:
     app: fontem-smoke-tests
     environment: prod
