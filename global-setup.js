@@ -19,7 +19,7 @@ import https from 'node:https'
 import http from 'node:http'
 
 const ORIGIN = process.env.BASE_URL || 'https://gmr.void42.net'
-const EMAIL = process.env.TEST_EMAIL || 'researcher@gmr.test'
+const EMAIL = process.env.TEST_EMAIL || 'researcher@fontem.eu'
 const PASSWORD = process.env.TEST_PASSWORD || 'TestPass123!'
 const STATE_PATH = './auth.json'
 

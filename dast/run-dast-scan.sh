@@ -95,7 +95,7 @@ log "Spider complete"
 log "Ensuring test users are registered in dast..."
 curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
     -H "Content-Type: application/json" \
-    -d '{"email":"researcher@gmr.test","password":"TestPass123!","name":"Test User"}' \
+    -d '{"email":"researcher@fontem.eu","password":"TestPass123!","name":"Test User"}' \
     >/dev/null 2>&1 || true
 curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
     -H "Content-Type: application/json" \

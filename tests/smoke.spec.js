@@ -13,7 +13,7 @@
  */
 import { test, expect } from '@playwright/test'
 
-const TEST_EMAIL = process.env.TEST_EMAIL || 'researcher@gmr.test'
+const TEST_EMAIL = process.env.TEST_EMAIL || 'researcher@fontem.eu'
 const TEST_PASSWORD = process.env.TEST_PASSWORD || 'TestPass123!'
 // String form so call sites can `.slice()` it for shorter markers.
 // `Date.now()` returns a number; calling `.slice()` on a number throws
