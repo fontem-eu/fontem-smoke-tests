@@ -37,6 +37,13 @@ jobs:
           path: .fontem-ci
           token: ${{ secrets.GMR_CI_READ_TOKEN }}
 
+      - uses: actions/setup-node@v4
+        with:
+          # Pin Node 22 explicitly so cyclonedx-npm and the docker
+          # build use a known version. The runner's bundled node
+          # has bitten us before — fontem-web #120 / vite 8.
+          node-version: '22'
+
       - name: Install deps (for cyclonedx-npm)
         run: npm ci --prefer-offline --no-audit --no-fund
 
