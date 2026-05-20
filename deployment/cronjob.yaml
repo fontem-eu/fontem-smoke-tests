@@ -1,5 +1,9 @@
 ---
-# Smoke tests against PROD (gmr.void42.net) — all 22 tests including ASSIST
+# Smoke tests against PROD (www.fontem.eu) — all 22 tests including ASSIST.
+# Pre-rename URL was gmr.void42.net; the frpc tunnel that proxied it to
+# Traefik survived but the post-rename Ingress only matches the new
+# host, so every cronjob run was returning 404 at /capi/auth/login
+# until this was switched over.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -33,7 +37,7 @@ spec:
               image: contribute.void42.internal/fontem/fontem-smoke-tests:vcb0f0c1
               env:
                 - name: BASE_URL
-                  value: "https://gmr.void42.net"
+                  value: "https://www.fontem.eu"
                 - name: TEST_EMAIL
                   valueFrom: { secretKeyRef: { name: gmr-smoke-creds, key: email } }
                 - name: TEST_PASSWORD
