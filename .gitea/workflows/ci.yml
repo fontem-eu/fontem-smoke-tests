@@ -25,6 +25,22 @@ jobs:
       - name: Secret scan (gitleaks)
         uses: ./.fontem-ci/actions/secret-scan
 
+  # SonarQube static analysis. Runs on both PR and main. There's no unit-test
+  # suite here — Playwright e2e runs against a deployed environment, not in
+  # CI — so no coverage report is produced; Sonar gets static analysis only.
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: void42/fontem-ci
+          path: .fontem-ci
+          token: ${{ secrets.GMR_CI_READ_TOKEN }}
+      - uses: ./.fontem-ci/actions/sonar-scan
+        with:
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
+
   build-sign:
     needs: security
     if: github.ref == 'refs/heads/main'
