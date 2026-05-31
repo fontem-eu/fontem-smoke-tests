@@ -84,6 +84,34 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="prefs-sign-out"]')).toBeVisible()
   })
 
+  test('AUTH-04: Registration form requires a password confirmation that matches', async ({ page }) => {
+    // Regression: the original register form accepted a single password
+    // and submitted it. A typo silently created an account the user
+    // could never sign back in to. The form now requires the password
+    // to be entered twice and disables submit while they don't match.
+    await clearSession(page)
+    await page.click('text=Create account')
+    await expect(page.locator('[data-testid="reg-password"]')).toBeVisible()
+    await expect(page.locator('[data-testid="reg-password-confirm"]'))
+      .toBeVisible({ timeout: 5_000 })
+
+    await page.fill('[data-testid="reg-name"]', 'Test User')
+    await page.fill('[data-testid="reg-email"]', `mismatch+${Date.now()}@fontem.eu`)
+    await page.fill('[data-testid="reg-password"]', 'SecurePass123')
+    await page.fill('[data-testid="reg-password-confirm"]', 'SecurePass124')
+
+    await expect(page.locator('[data-testid="reg-password-mismatch"]')).toBeVisible()
+    await expect(page.locator('[data-testid="reg-submit"]')).toBeDisabled()
+
+    // Correcting the typo clears the error and re-enables submit
+    // (without actually clicking — we don't want to create an account
+    // here. The submit-side enforcement is exercised by the unit test
+    // in fontem-web's tests/unit/LoginView.test.js).
+    await page.fill('[data-testid="reg-password-confirm"]', 'SecurePass123')
+    await expect(page.locator('[data-testid="reg-password-mismatch"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="reg-submit"]')).toBeEnabled()
+  })
+
   // ── Search & Browse ────────────────────────────────────────────
 
   test('SEARCH-04: Search for Apple returns US results', async ({ page }) => {
@@ -114,6 +142,54 @@ test.describe.serial('Production Smoke Tests', () => {
   test('BROWSE-07: Contracts view renders', async ({ page }) => {
     await page.goto('/c/AAPL/contracts')
     await expect(page.locator('[data-testid="contracts-panel"]').first()).toBeVisible({ timeout: 20_000 })
+  })
+
+  test('PROC-TED-LINK: every contracts row links back to its TED notice', async ({ page }) => {
+    // Regression for the prod issue where contract rows rendered the
+    // title as plain text — there was no path back to the original
+    // filing because the loader never populated Contract.ted_url and
+    // the UI had no fallback. Fix lives in fontem-web (tedNoticeUrl
+    // helper + explicit "View ↗" column / mobile affordance).
+    //
+    // Siemens AG is a reliable choice here: known to have many TED
+    // contracts in the graph regardless of ETL freshness.
+    await page.goto('/')
+    const searchInput = page.locator('input[type="search"]').first()
+    await searchInput.fill('Siemens AG')
+    await expect(page.locator('.gmr-card').first()).toBeVisible({ timeout: 10_000 })
+    await page.locator('.gmr-card').first().click()
+    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 10_000 })
+
+    // Switch into the procurement category, then click the contracts
+    // view. The Siemens entity always has procurement data populated
+    // in the graph, so the panel should reach the 'done' state.
+    const procCat = page.locator('[data-testid="view-cat-procurement"]').first()
+    if (await procCat.isVisible().catch(() => false)) await procCat.click()
+    const contractsTab = page.locator('[data-testid="view-tab-contracts"]').first()
+    if (await contractsTab.isVisible().catch(() => false)) await contractsTab.click()
+    await expect(page.locator('[data-testid="contracts-panel"]').first())
+      .toBeVisible({ timeout: 20_000 })
+
+    // Wait for actual data rows to appear (not the empty/loading state).
+    const tableLink = page.locator('[data-testid^="contract-ted-link-"]').first()
+    await tableLink.waitFor({ state: 'visible', timeout: 20_000 })
+
+    // The link must:
+    //   - point at ted.europa.eu (real domain, not a stub)
+    //   - open in a new tab (target=_blank, rel=noopener)
+    //   - be rendered for every row, not just rows with explicit ted_url
+    const href = await tableLink.getAttribute('href')
+    expect(href).toMatch(/^https:\/\/ted\.europa\.eu\//)
+    expect(await tableLink.getAttribute('target')).toBe('_blank')
+    expect(await tableLink.getAttribute('rel')).toContain('noopener')
+
+    const linkCount = await page.locator('[data-testid^="contract-ted-link-"]').count()
+    const rowCount = await page.locator('[data-testid^="contract-row-"]').count()
+    expect(linkCount).toBeGreaterThan(0)
+    // Every visible row should have its TED link affordance — the
+    // fallback URL builder makes it impossible to miss any row that
+    // has a ted_notice_id, which is required at upsert time.
+    expect(linkCount).toBe(rowCount)
   })
 
   test('BROWSE-08: Graph explorer renders and supports expand/collapse', async ({ page }) => {
@@ -756,6 +832,59 @@ test.describe.serial('Production Smoke Tests', () => {
   // ── AI Assistant (via UI) ───────────────────────────────────────
 
   /**
+   * Helper: send a message and capture every distinct assist-status
+   * label rendered while the response streams in.
+   *
+   * Each MCP tool call sets the streaming status detail to the human-
+   * readable label registered in mistral_client.py's _STATUS_LABELS
+   * map (e.g. "Searching entities" for mcp__gmr__search_entities).
+   * Polling the visible label text gives us a deterministic signal
+   * that a tool actually ran end-to-end — the LLM can hallucinate
+   * a Siemens-sounding answer without ever calling a tool, but it
+   * can't fake a status string the frontend only renders when the
+   * server emits a `tool_use` SSE phase.
+   *
+   * Returns { response, statuses } so callers can assert on both.
+   */
+  async function sendAssistMessageAndCaptureStatuses(page, message) {
+    const beforeCount = await page.locator('.assist-msg--assistant').count()
+    await page.fill('[data-testid="assist-input"]', message)
+    await page.click('[data-testid="assist-send"]')
+
+    const status = page.locator('[data-testid="assist-status"] .status-detail')
+    const statuses = new Set()
+    let pollerActive = true
+    const pollDeadline = Date.now() + 120_000
+    const poll = (async () => {
+      while (pollerActive && Date.now() < pollDeadline) {
+        const visible = await status.isVisible().catch(() => false)
+        if (visible) {
+          const text = (await status.innerText().catch(() => '')).trim()
+          if (text) statuses.add(text)
+        }
+        await page.waitForTimeout(120)
+      }
+    })()
+
+    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`)
+      .waitFor({ state: 'visible', timeout: 30_000 })
+    const statusEl = page.locator('[data-testid="assist-status"]')
+    if (await statusEl.isVisible().catch(() => false)) {
+      await statusEl.waitFor({ state: 'hidden', timeout: 120_000 })
+    } else {
+      await page.waitForTimeout(1000)
+    }
+    pollerActive = false
+    await poll
+
+    const response = await page
+      .locator('.assist-msg--assistant .msg-text')
+      .last()
+      .innerText()
+    return { response, statuses: Array.from(statuses) }
+  }
+
+  /**
    * Helper: send a message in the assist panel and wait for the response.
    * Returns the text of the NEW assistant message (not old ones from previous tests).
    */
@@ -789,6 +918,60 @@ test.describe.serial('Production Smoke Tests', () => {
   // is unchanged, so these three tests exercise the same UI surface.
   //
   // The ASSIST-* tests retry once on the playwright level (config.retries=1)
+  // Regression for the prod report that the AssistPanel input row sits
+  // behind the cookie consent banner — the banner is fixed at z-index
+  // 1000 and the input row was at z-index 100. Once the user accepts
+  // / declines, the banner goes away and the input is fine; pre-consent
+  // it was occluded on desktop and fully hidden on mobile. Fix lives
+  // in CookieConsentBanner.vue (exports `--cookie-banner-h`) + AssistPanel.vue
+  // (reads it as padding-bottom).
+  test('ASSIST-PRE-19: assistant input stays visible above the cookie banner', async ({ page }) => {
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    // Force the "pre-consent" state — clear the storage key the
+    // global setup sets so the banner renders. We're targeting the
+    // editor view because that's where the assistant lives.
+    await page.evaluate(() => localStorage.removeItem('gmr-cookie-consent'))
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="cookie-consent-banner"]'))
+      .toBeVisible({ timeout: 5_000 })
+
+    await page.click('[data-testid="assist-toggle"]')
+    const input = page.locator('[data-testid="assist-input"]')
+    const banner = page.locator('[data-testid="cookie-consent-banner"]')
+    await expect(input).toBeVisible({ timeout: 5_000 })
+
+    // The input must sit ABOVE the banner — input.bottom must be at
+    // or above banner.top (with a 1px slack for sub-pixel rendering).
+    const inputBox = await input.boundingBox()
+    const bannerBox = await banner.boundingBox()
+    expect(inputBox).not.toBeNull()
+    expect(bannerBox).not.toBeNull()
+    expect(
+      inputBox.y + inputBox.height,
+      `assist input bottom (${inputBox.y + inputBox.height}) should sit at or above banner top (${bannerBox.y})`,
+    ).toBeLessThanOrEqual(bannerBox.y + 1)
+
+    // Same check on a mobile-narrow viewport — the assist-panel is full
+    // width and the banner is full width, so the overlap was actually
+    // bigger here. Resize and re-measure.
+    await page.setViewportSize({ width: 375, height: 667 })
+    await page.waitForTimeout(150)  // let layout settle
+    const inputMob = await input.boundingBox()
+    const bannerMob = await banner.boundingBox()
+    expect(inputMob).not.toBeNull()
+    expect(bannerMob).not.toBeNull()
+    expect(
+      inputMob.y + inputMob.height,
+      `mobile: assist input bottom (${inputMob.y + inputMob.height}) should sit at or above banner top (${bannerMob.y})`,
+    ).toBeLessThanOrEqual(bannerMob.y + 1)
+
+    // Tidy up so the rest of the suite runs in its expected "consent
+    // already given" state (other tests don't render the banner).
+    await page.setViewportSize({ width: 1280, height: 720 })
+    await page.evaluate(() => localStorage.setItem('gmr-cookie-consent', 'declined'))
+  })
+
   // and have an extra in-test retry below for the LLM content match —
   // Mistral occasionally returns a stylistic answer like "Apple's NASDAQ
   // listing is under the AAPL ticker." vs "Apple Inc.'s ticker is AAPL"
@@ -848,6 +1031,102 @@ test.describe.serial('Production Smoke Tests', () => {
     // so the badge would say "Applied" while the editor was empty. We now
     // check the editor body actually contains the inserted marker.
     await expect(page.locator('.tiptap-editor .tiptap')).toContainText(marker, { timeout: 10_000 })
+  })
+
+  test('ASSIST-MCP-1: assistant fires a real MCP search_entities tool call', async ({ page }) => {
+    // Regression for the silent rename breakage. fontem-community-api and
+    // fontem-mcp-server both defaulted GMR_API_URL/GMR_API_INTERNAL to
+    // http://gmr-api.gmr.svc.cluster.local, which is NXDOMAIN post-rename
+    // in every fontem-* namespace. Every search / get_company / contracts
+    // tool call failed at the network layer. ASSIST-21's keyword match
+    // (siemens|contract|procurement|lobbying|eu) passed anyway because
+    // the LLM has prior knowledge of Siemens. This test asserts on the
+    // streaming status label — which the frontend only renders when the
+    // server emits a `tool_use` SSE phase — so a broken tool path can't
+    // hide behind plausible-sounding LLM completions.
+    test.setTimeout(120_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+    const { response, statuses } = await sendAssistMessageAndCaptureStatuses(
+      page,
+      'Use the search_entities tool to look up the company "Apple Inc". ' +
+      'Then quote the alpha-3 country code stored on that record. ' +
+      'Reply with exactly two lines: line 1 the company name, line 2 the country code.',
+    )
+    expect(
+      statuses,
+      `Expected at least one tool-call status to appear during streaming, got: ${JSON.stringify(statuses)}`,
+    ).toContain('Searching entities')
+    // Sanity: response should actually contain the country code the
+    // tool returned. USA is what's stored on Apple Inc in the graph.
+    expect(response).toMatch(/USA/)
+  })
+
+  test('ASSIST-BYPASS: accept-all toggle auto-applies proposed edits', async ({ page }) => {
+    // Regression for the prod ask: the assistant had no equivalent of
+    // Claude Code's "bypass permissions" mode — every propose_edit
+    // came back with an Apply/Dismiss prompt and broke flow on multi-
+    // step edit sessions. Fix lives in AssistPanel.vue (bypass toggle
+    // persisted in localStorage, auto-fires applyProposal on each
+    // proposal as soon as the stream completes, marks the proposal
+    // autoApplied so the UI shows "Applied automatically" instead of
+    // the Apply/Dismiss buttons).
+    test.setTimeout(120_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+    const toggle = page.locator('[data-testid="assist-bypass-toggle"]')
+    await expect(toggle).toBeVisible()
+    // Default: OFF
+    await expect(toggle).not.toBeChecked()
+
+    // Flip on, then verify persistence to localStorage. This is the
+    // contract the unit test pins; checking it here ensures the same
+    // key/value reaches the deployed bundle (cache-bust / minifier /
+    // CSP didn't break the watcher).
+    await toggle.check()
+    await expect(toggle).toBeChecked()
+    const persisted = await page.evaluate(
+      () => localStorage.getItem('fontem-assist-bypass-permissions'),
+    )
+    expect(persisted).toBe('1')
+
+    // Ask for a concrete title change. The assistant should respond
+    // with a propose_edit tool call; with bypass on, the panel applies
+    // it automatically — no Apply button is rendered, and the
+    // "Applied automatically" badge shows instead.
+    await sendAssistMessage(page,
+      'Use the set_title tool to set the report title to "Bypass mode smoke test". ' +
+      'Reply with just "ok" after calling the tool.')
+
+    // The Applied-automatically badge proves the bypass path ran.
+    await expect(
+      page.locator('[data-testid="proposal-applied"]').last(),
+    ).toContainText(/Applied automatically/i, { timeout: 30_000 })
+    // And the manual Apply button must NOT exist for that proposal,
+    // i.e. the user was never prompted.
+    const proposalApplyButtons = page.locator('[data-testid="proposal-apply"]')
+    expect(await proposalApplyButtons.count()).toBe(0)
+
+    // Tidy up: turn the toggle back off so the rest of the suite
+    // and any subsequent runs against this report start in the
+    // non-bypass default state.
+    await toggle.uncheck()
+    await expect(toggle).not.toBeChecked()
+    const cleared = await page.evaluate(
+      () => localStorage.getItem('fontem-assist-bypass-permissions'),
+    )
+    expect(cleared).toBeNull()
   })
 
   test('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
