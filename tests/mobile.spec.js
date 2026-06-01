@@ -166,29 +166,33 @@ test.describe.serial('Mobile Smoke Suite', () => {
     await page.click('[data-testid="assist-toggle"]')
     await expect(page.locator('[data-testid="assist-input"]')).toBeVisible({ timeout: 5_000 })
 
-    // Snapshot the padded-bottom value while the banner is visible.
-    const paddedBottom = await page.locator('[data-testid="assist-input"]').evaluate(
+    // The cookie-banner offset lives on the `.assist-input` FORM
+    // (its `padding-bottom: calc(0.75rem + var(--cookie-banner-h, 0px))`),
+    // NOT on the `<input>` element — the input's own padding-bottom is
+    // a static `0.5rem` from .assist-input input { padding: 0.5rem ... }.
+    // Read the form value so the assertion actually tracks the var.
+    const formSel = 'form.assist-input'
+    const paddedBefore = await page.locator(formSel).evaluate(
       (el) => parseFloat(getComputedStyle(el).paddingBottom) || 0,
     )
-    expect(paddedBottom).toBeGreaterThan(0)
-    await demoMark(page, `Input padding-bottom while banner up: ${paddedBottom}px`, 2000)
+    expect(paddedBefore).toBeGreaterThan(12)
+    await demoMark(page, `Form padding-bottom while banner up: ${paddedBefore}px (var ≠ 0)`, 2000)
 
-    // Accept the banner; the input's padding-bottom should collapse
-    // back near zero (the bare CSS `0.75rem` baseline) once the var goes
-    // to '0px'.
+    // Accept the banner; --cookie-banner-h goes to '0px', the calc()
+    // collapses back to the bare 0.75rem (12 px) baseline.
     await page.click('[data-testid="cookie-consent-accept"]')
     await expect(page.locator('[data-testid="cookie-consent-banner"]')).not.toBeVisible()
-    await demoMark(page, 'Banner dismissed, --cookie-banner-h should drop to 0', 1500)
-    // Allow Vue's onBeforeUnmount to run + style to settle.
+    await demoMark(page, 'Banner dismissed — var should drop to 0', 1500)
     await page.waitForFunction(() => {
       const v = getComputedStyle(document.documentElement).getPropertyValue('--cookie-banner-h')
       return v === '0px' || v === ''
     }, undefined, { timeout: 3_000 })
-    const afterPadded = await page.locator('[data-testid="assist-input"]').evaluate(
+
+    const paddedAfter = await page.locator(formSel).evaluate(
       (el) => parseFloat(getComputedStyle(el).paddingBottom) || 0,
     )
-    expect(afterPadded).toBeLessThan(paddedBottom)
-    await demoMark(page, `Input padding-bottom after dismiss: ${afterPadded}px (was ${paddedBottom}px) ✓`, 2500)
+    expect(paddedAfter).toBeLessThan(paddedBefore)
+    await demoMark(page, `Form padding-bottom after dismiss: ${paddedAfter}px (was ${paddedBefore}px) ✓`, 2500)
   })
 
   test('MOBILE-CLEANUP: delete the test story', async ({ page }) => {
