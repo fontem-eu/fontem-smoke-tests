@@ -396,7 +396,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // error / no-data copy. The UUID belongs in the URL, not at the
     // user. Pick a known company UUID (Siemens Energy AG/ADR) and
     // confirm the UUID never appears in the rendered page.
-    const UUID = '867f66f4-4aa4-5737-9bed-d51e2746a729'
+    const UUID = '867f66f4-4aa4-5737-9bed-d51e2746a729' // gitleaks:allow — public gmr_id (Siemens Energy AG/ADR)
     await page.goto(`/c/${UUID}/summary`)
     // Wait for the summary panel to mount and for the company name
     // to resolve — the panel calls fetchPriceHistory + fetchFundamentals
@@ -421,7 +421,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // Ministry of Defence Acquisition) — a probe via /api/fundamentals
     // returns 404, HomeView flips the disabled flag, DataViewSelector
     // adds .dvs-cat--disabled + aria-disabled.
-    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8'
+    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
     await page.goto(`/c/${AUTH}/profile`)
     await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 15_000 })
     // The probe runs in parallel with the rest of the page; give it
