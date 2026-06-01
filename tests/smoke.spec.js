@@ -192,6 +192,41 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(linkCount).toBe(rowCount)
   })
 
+  test('PROC-COUNTERPARTY-LINK: contracts rows link to the counterparty profile', async ({ page }) => {
+    // Regression for the prod ask: clicking the authority / contractor
+    // cell in the contracts panel had no effect — it was plain text.
+    // The contracts panel now wraps each cell in a RouterLink to
+    // /c/<id>/profile when the API provides the linkable id
+    // (authority_id for company-view rows, contractor_gmr_id for
+    // authority-view rows). The fontem-api side returns those ids; the
+    // fontem-web side renders them. End-to-end pin: navigate to a
+    // company's contracts → click the first counterparty link → land
+    // on the authority's profile route.
+    await page.goto('/')
+    const searchInput = page.locator('input[type="search"]').first()
+    await searchInput.fill('Siemens AG')
+    await expect(page.locator('.gmr-card').first()).toBeVisible({ timeout: 10_000 })
+    await page.locator('.gmr-card').first().click()
+    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 10_000 })
+
+    const procCat = page.locator('[data-testid="view-cat-procurement"]').first()
+    if (await procCat.isVisible().catch(() => false)) await procCat.click()
+    await expect(page.locator('[data-testid="contracts-panel"]').first())
+      .toBeVisible({ timeout: 20_000 })
+
+    const counterparty = page.locator('[data-testid^="contract-counterparty-link-"]').first()
+    await counterparty.waitFor({ state: 'visible', timeout: 20_000 })
+    const href = await counterparty.getAttribute('href')
+    // Profile route shape: /c/<id>/profile. Embed-stable URL.
+    expect(href).toMatch(/^\/c\/[^/]+\/profile$/)
+
+    // Click and verify the URL changes to the counterparty profile.
+    await counterparty.click()
+    await page.waitForURL(/\/c\/[^/]+\/profile$/, { timeout: 10_000 })
+    // The destination should mount the same data-view shell.
+    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 10_000 })
+  })
+
   test('BROWSE-08: Graph explorer renders and supports expand/collapse', async ({ page }) => {
     // Siemens AG has graph connections (e.g. Universität Stuttgart)
     await page.goto('/')
@@ -336,6 +371,87 @@ test.describe.serial('Production Smoke Tests', () => {
       path: 'test-results/BROWSE-09-nuts-map.png',
       fullPage: false,
     })
+  })
+
+  test('PROC-MAP-TOOLTIP: business-map tooltip reads "no known contracts" not "no data"', async ({ page }) => {
+    // Regression for the wording bug + the rendered-template contract.
+    // The hover element is a Vue-rendered div, not part of the MapLibre
+    // canvas — so we don't need to fake a real mousemove. We just need
+    // to render the panel and walk the DOM to confirm the new copy is
+    // in the template (and the old copy is gone).
+    await page.goto('/c/AAPL/entity-nuts-map')
+    await expect(page.locator('[data-testid="entity-nuts-map"]')).toBeVisible({ timeout: 20_000 })
+    await expect(page.locator('[data-testid="enu-loading"]')).not.toBeVisible({ timeout: 30_000 })
+    // The compiled v-else branch shows up in the bundle's render
+    // function; finding the new data-testid in the source string is a
+    // sufficient pin that the wording change shipped.
+    const html = await page.content()
+    expect(html).toContain('enu-hover-empty')
+    expect(html.toLowerCase()).not.toMatch(/>no data</)
+  })
+
+  test('PROFILE-NO-UUID: financials view does not render the raw gmr_id UUID', async ({ page }) => {
+    // Regression: navigating directly to /c/<uuid>/summary used to
+    // render the bare UUID in the summary-ticker pill and inline
+    // error / no-data copy. The UUID belongs in the URL, not at the
+    // user. Pick a known company UUID (Siemens Energy AG/ADR) and
+    // confirm the UUID never appears in the rendered page.
+    const UUID = '867f66f4-4aa4-5737-9bed-d51e2746a729' // gitleaks:allow — public gmr_id (Siemens Energy AG/ADR)
+    await page.goto(`/c/${UUID}/summary`)
+    // Wait for the summary panel to mount and for the company name
+    // to resolve — the panel calls fetchPriceHistory + fetchFundamentals
+    // before painting its identity row.
+    await expect(page.locator('[data-testid="summary-panel"]')).toBeVisible({ timeout: 20_000 })
+    await expect(page.locator('[data-testid="summary-company"]')).toBeVisible({ timeout: 20_000 })
+
+    // The summary-ticker pill renders only for human tickers; for a
+    // UUID symbol it should not render at all.
+    const tickerPill = page.locator('[data-testid="summary-ticker"]')
+    await expect(tickerPill).toHaveCount(0)
+
+    // Belt-and-braces: the UUID must not appear in the rendered body
+    // text of the panel.
+    const panelText = await page.locator('[data-testid="summary-panel"]').innerText()
+    expect(panelText).not.toContain(UUID)
+  })
+
+  test('PROFILE-FIN-DISABLED: financials tab is greyed out on an authority profile', async ({ page }) => {
+    // Authorities never have financial statements; the tab now greys
+    // itself out for them. Picks a known authority UUID (Danish
+    // Ministry of Defence Acquisition) — a probe via /api/fundamentals
+    // returns 404, HomeView flips the disabled flag, DataViewSelector
+    // adds .dvs-cat--disabled + aria-disabled.
+    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
+    await page.goto(`/c/${AUTH}/profile`)
+    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 15_000 })
+    // The probe runs in parallel with the rest of the page; give it
+    // up to 15s to resolve before asserting the disabled state.
+    const finCat = page.locator('[data-testid="view-cat-financials"]')
+    await expect(finCat).toBeVisible()
+    await expect(finCat).toHaveClass(/dvs-cat--disabled/, { timeout: 15_000 })
+    await expect(finCat).toHaveAttribute('aria-disabled', 'true')
+
+    // Clicking must NOT navigate away from the profile view (the
+    // browser would otherwise rewrite the URL via the data-view
+    // selector emit). After a click the route stays on /profile.
+    await finCat.click({ force: true })
+    await page.waitForTimeout(300)
+    expect(new URL(page.url()).pathname).toBe(`/c/${AUTH}/profile`)
+  })
+
+  test('PROFILE-ANALYSIS-GONE: the Analysis tab is removed from the profile UI', async ({ page }) => {
+    // Regression for the chore: the Long-Term Value sub-view was
+    // removed from the user-clickable strip. /api/:ticker/gmr_data
+    // is still alive for embeds, and direct navigation to
+    // /c/<ticker>/gmr-long still mounts the panel — only the tab
+    // is gone from the UI.
+    await page.goto('/c/AAPL/profile')
+    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('[data-testid="view-cat-analysis"]')).toHaveCount(0)
+    // Sanity: other categories are still there.
+    await expect(page.locator('[data-testid="view-cat-overview"]')).toBeVisible()
+    await expect(page.locator('[data-testid="view-cat-financials"]')).toBeVisible()
+    await expect(page.locator('[data-testid="view-cat-procurement"]')).toBeVisible()
   })
 
   // ── Report Lifecycle (all via UI) ──────────────────────────────
@@ -1058,10 +1174,15 @@ test.describe.serial('Production Smoke Tests', () => {
       'Then quote the alpha-3 country code stored on that record. ' +
       'Reply with exactly two lines: line 1 the company name, line 2 the country code.',
     )
+    // Status labels render with the entity arg appended (e.g.
+    // `Searching entities: "Apple Inc"`), so substring-match rather
+    // than exact array membership. Anything containing "Searching
+    // entities" can only have come from the search_entities tool_use
+    // SSE phase — the LLM never writes that string into chunks.
     expect(
-      statuses,
+      statuses.some(s => s.includes('Searching entities')),
       `Expected at least one tool-call status to appear during streaming, got: ${JSON.stringify(statuses)}`,
-    ).toContain('Searching entities')
+    ).toBe(true)
     // Sanity: response should actually contain the country code the
     // tool returned. USA is what's stored on Apple Inc in the graph.
     expect(response).toMatch(/USA/)
