@@ -21,6 +21,33 @@ const TEST_PASSWORD = process.env.TEST_PASSWORD || 'TestPass123!'
 const RUN_ID = String(Date.now())
 const STORY_TITLE = `Smoke Story ${RUN_ID}`
 
+// Demo-mode hook for the recording config: when SMOKE_DEMO=1 the
+// helper inserts a visible pause + on-page banner so the resulting
+// video is followable by a human reviewer. In CI the helper is a
+// no-op — the tests stay fast.
+const SMOKE_DEMO = process.env.SMOKE_DEMO === '1'
+async function demoMark(page, label, ms = 1500) {
+  if (!SMOKE_DEMO) return
+  // Inject a top-of-page banner with the current checkpoint name so
+  // the reviewer can read what the test is about to assert, then hold
+  // for `ms` milliseconds before moving on.
+  await page.evaluate((text) => {
+    let el = document.querySelector('[data-demo-banner]')
+    if (!el) {
+      el = document.createElement('div')
+      el.setAttribute('data-demo-banner', '1')
+      el.style.cssText =
+        'position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
+        'padding:10px 16px;font:600 14px/1.3 system-ui,sans-serif;' +
+        'color:#fff;background:#0969da;text-align:center;' +
+        'box-shadow:0 2px 8px rgba(0,0,0,.25)'
+      document.body.appendChild(el)
+    }
+    el.textContent = text
+  }, label).catch(() => { /* page may be navigating */ })
+  await page.waitForTimeout(ms)
+}
+
 /**
  * Ensure the browser is in a logged-in state. Every test inherits the
  * session via Playwright's `storageState` (populated once by
@@ -203,12 +230,15 @@ test.describe.serial('Production Smoke Tests', () => {
     // company's contracts → click the first counterparty link → land
     // on the authority's profile route.
     await page.goto('/')
+    await demoMark(page, 'PROC-COUNTERPARTY-LINK — search for Siemens AG')
     const searchInput = page.locator('input[type="search"]').first()
     await searchInput.fill('Siemens AG')
     await expect(page.locator('.gmr-card').first()).toBeVisible({ timeout: 10_000 })
+    await demoMark(page, 'Pick the Siemens AG search result')
     await page.locator('.gmr-card').first().click()
     await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 10_000 })
 
+    await demoMark(page, 'Open the Procurement → Contracts tab')
     const procCat = page.locator('[data-testid="view-cat-procurement"]').first()
     if (await procCat.isVisible().catch(() => false)) await procCat.click()
     await expect(page.locator('[data-testid="contracts-panel"]').first())
@@ -219,12 +249,14 @@ test.describe.serial('Production Smoke Tests', () => {
     const href = await counterparty.getAttribute('href')
     // Profile route shape: /c/<id>/profile. Embed-stable URL.
     expect(href).toMatch(/^\/c\/[^/]+\/profile$/)
+    await demoMark(page, `Counterparty cell is a link to ${href}`)
 
     // Click and verify the URL changes to the counterparty profile.
     await counterparty.click()
     await page.waitForURL(/\/c\/[^/]+\/profile$/, { timeout: 10_000 })
     // The destination should mount the same data-view shell.
     await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 10_000 })
+    await demoMark(page, 'Landed on the authority profile ✓', 2000)
   })
 
   test('BROWSE-08: Graph explorer renders and supports expand/collapse', async ({ page }) => {
@@ -373,46 +405,145 @@ test.describe.serial('Production Smoke Tests', () => {
     })
   })
 
-  test('PROC-MAP-TOOLTIP: business-map tooltip reads "no known contracts" not "no data"', async ({ page }) => {
-    // Regression for the wording bug + the rendered-template contract.
-    // The hover element is a Vue-rendered div, not part of the MapLibre
-    // canvas — so we don't need to fake a real mousemove. We just need
-    // to render the panel and walk the DOM to confirm the new copy is
-    // in the template (and the old copy is gone).
-    await page.goto('/c/AAPL/entity-nuts-map')
+  test('PROC-MAP-COLORIZE: business map paints visible colors for an entity with EU contracts', async ({ page }) => {
+    // Two checks bundled into one e2e — the prod feedback was that
+    // (a) the tooltip wording was wrong ("no data" → "no known
+    // contracts") and (b) for entities that DO have contracts the
+    // affected countries were rendering gray/white instead of the
+    // viridis palette. The unit tests pin both fixes; this e2e adds
+    // the visible-proof layer.
+    //
+    // Use the Danish Ministry of Defence Acquisition: it procures
+    // across DK, DE, AT, FR — four colored countries, easy to see
+    // on the recording. Apple (US) has zero EU contracts so the map
+    // would be all-gray and there'd be nothing to verify.
+    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
+
+    // Capture the aggregate API response so we can confirm the
+    // backend returned positive values for several regions BEFORE
+    // asserting the map painted them. Distinguishes "API broken"
+    // from "render broken" if this ever regresses.
+    let aggregate = null
+    page.on('response', async (resp) => {
+      const u = resp.url()
+      if (u.includes('/geo/entity/') && u.includes('/aggregate')) {
+        try { aggregate = await resp.json() } catch { /* skip */ }
+      }
+    })
+
+    await page.goto(`/c/${AUTH}/entity-nuts-map`)
+    await demoMark(page, 'PROC-MAP-COLORIZE — open the Business Map for Danish Ministry of Defence')
     await expect(page.locator('[data-testid="entity-nuts-map"]')).toBeVisible({ timeout: 20_000 })
     await expect(page.locator('[data-testid="enu-loading"]')).not.toBeVisible({ timeout: 30_000 })
-    // The compiled v-else branch shows up in the bundle's render
-    // function; finding the new data-testid in the source string is a
-    // sufficient pin that the wording change shipped.
+    await expect(page.locator('[data-testid="enu-map"] canvas')).toBeVisible({ timeout: 15_000 })
+
+    // Confirm the API actually returned positive regions — without
+    // this the colorize is testing nothing.
+    expect(aggregate, 'aggregate API was never called').not.toBeNull()
+    const positives = (aggregate?.regions ?? []).filter((r) => (r.value ?? 0) > 0)
+    expect(
+      positives.length,
+      `expected at least one positive region (Danish Ministry should have DK/DE/AT/FR); got ${JSON.stringify(aggregate?.regions)}`,
+    ).toBeGreaterThan(0)
+    await demoMark(page, `API returned ${positives.length} regions with contracts: ${positives.map((r) => r.nuts_code).join(', ')}`, 2500)
+
+    // AtlasLegend only mounts when colorScaleProps.bounds is non-null.
+    // bounds is non-null only when at least one rendered feature has a
+    // positive value, which in turn requires the colorize fill layer
+    // to actually be wired up. So a visible legend == the regression
+    // (gray-instead-of-color, single-value bounds collapse) is gone.
+    await expect(page.locator('[data-testid="atlas-legend"]'))
+      .toBeVisible({ timeout: 10_000 })
+    await demoMark(page, 'Atlas legend is visible → bounds set → colorize is wired ✓', 2500)
+
+    // Pixel-level proof: scan the rendered canvas for highly-
+    // saturated pixels — those can only come from the choropleth
+    // data layer painting in the palette (viridis purple→yellow, or
+    // PuOr depending on user prefs). The no-data null layer paints
+    // in a low-saturation gray; the OSM basemap is beige/light. So
+    // a saturated pixel ⇒ colorize is wired.
+    //
+    // MapLibre's WebGL context does NOT set preserveDrawingBuffer,
+    // so canvas.toDataURL inside the page returns blank. Capture via
+    // Playwright's CDP-backed screenshot instead — that grabs the
+    // composited framebuffer — then ship the PNG bytes back into the
+    // page for decoding via an <img>+2D canvas+getImageData.
+    const mapCanvas = page.locator('[data-testid="enu-map"] canvas').first()
+    const pngBuf = await mapCanvas.screenshot()
+    const colorized = await page.evaluate(async (bytes) => {
+      const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' })
+      const url = URL.createObjectURL(blob)
+      const img = new Image()
+      img.src = url
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej })
+      const off = document.createElement('canvas')
+      off.width = img.width
+      off.height = img.height
+      const ctx = off.getContext('2d')
+      ctx.drawImage(img, 0, 0)
+      const { data } = ctx.getImageData(0, 0, off.width, off.height)
+      URL.revokeObjectURL(url)
+      let saturated = 0
+      let nullGray = 0
+      for (let i = 0; i < data.length; i += 4 * 16) {
+        const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3]
+        if (a < 200) continue
+        const maxc = Math.max(r, g, b), minc = Math.min(r, g, b)
+        const sat = maxc - minc
+        if (sat < 10 && maxc > 180 && maxc < 230) nullGray++
+        if (sat > 60 && maxc > 100) saturated++
+      }
+      return { saturated, nullGray, width: off.width, height: off.height }
+    }, Array.from(pngBuf))
+
+    expect(
+      colorized.saturated,
+      `Expected ≥1 saturated pixel on the canvas (choropleth paint) but found ${colorized.saturated}. ` +
+      `Null-gray pixel count was ${colorized.nullGray}. ` +
+      `The choropleth layer is rendering nothing — either the layer never mounted or bounds collapsed.`,
+    ).toBeGreaterThan(0)
+    await demoMark(page, `Pixel scan: ${colorized.saturated} colored pixels, ${colorized.nullGray} null-gray ✓`, 2500)
+
+    // Bundle-text check: the tooltip wording change shipped.
     const html = await page.content()
-    expect(html).toContain('enu-hover-empty')
-    expect(html.toLowerCase()).not.toMatch(/>no data</)
+    const m = html.match(/\/assets\/index-[A-Za-z0-9]+\.js/)
+    expect(m).not.toBeNull()
+    const bundleUrl = new URL(m[0], page.url()).toString()
+    const bundle = await page.evaluate(async (u) => {
+      const r = await fetch(u); return r.text()
+    }, bundleUrl)
+    expect(bundle).toContain('no known contracts')
+    expect(bundle).not.toMatch(/"no data"/)
+    await demoMark(page, 'Bundle: "no known contracts" present, "no data" gone ✓', 2000)
   })
 
   test('PROFILE-NO-UUID: financials view does not render the raw gmr_id UUID', async ({ page }) => {
     // Regression: navigating directly to /c/<uuid>/summary used to
-    // render the bare UUID in the summary-ticker pill and inline
-    // error / no-data copy. The UUID belongs in the URL, not at the
-    // user. Pick a known company UUID (Siemens Energy AG/ADR) and
-    // confirm the UUID never appears in the rendered page.
+    // render the bare UUID in two places — the SummaryPanel ticker
+    // pill AND the financials header title (which fell back to
+    // `companyName || symbol` and was hit by the summary view's no-
+    // load path where companyName stayed null). The UUID belongs in
+    // the URL, not at the user.
     const UUID = '867f66f4-4aa4-5737-9bed-d51e2746a729' // gitleaks:allow — public gmr_id (Siemens Energy AG/ADR)
     await page.goto(`/c/${UUID}/summary`)
-    // Wait for the summary panel to mount and for the company name
-    // to resolve — the panel calls fetchPriceHistory + fetchFundamentals
-    // before painting its identity row.
-    await expect(page.locator('[data-testid="summary-panel"]')).toBeVisible({ timeout: 20_000 })
-    await expect(page.locator('[data-testid="summary-company"]')).toBeVisible({ timeout: 20_000 })
+    await demoMark(page, `PROFILE-NO-UUID — navigate to /c/${UUID.slice(0, 8)}…/summary`)
+    await expect(page.locator('[data-testid="financials-panel"]')).toBeVisible({ timeout: 20_000 })
+    // Wait for the resolve call to populate the company name. The
+    // resolver hits /api/companies first; on staging this entity has
+    // a known company_name.
+    await expect(page.locator('[data-testid="financials-title"]'))
+      .toHaveText(/Siemens|Entity profile/, { timeout: 15_000 })
+    await demoMark(page, 'Header shows the company name, not the UUID ✓', 2000)
 
-    // The summary-ticker pill renders only for human tickers; for a
-    // UUID symbol it should not render at all.
-    const tickerPill = page.locator('[data-testid="summary-ticker"]')
-    await expect(tickerPill).toHaveCount(0)
+    // The summary-ticker pill (inside SummaryPanel) renders only for
+    // human-readable tickers — for a UUID symbol it should not exist.
+    await expect(page.locator('[data-testid="summary-ticker"]')).toHaveCount(0)
 
-    // Belt-and-braces: the UUID must not appear in the rendered body
-    // text of the panel.
-    const panelText = await page.locator('[data-testid="summary-panel"]').innerText()
-    expect(panelText).not.toContain(UUID)
+    // Belt-and-braces: the UUID must not appear anywhere in the
+    // page's visible body text.
+    const bodyText = await page.locator('body').innerText()
+    expect(bodyText).not.toContain(UUID)
+    await demoMark(page, 'UUID never appears in the visible body text ✓', 2000)
   })
 
   test('PROFILE-FIN-DISABLED: financials tab is greyed out on an authority profile', async ({ page }) => {
@@ -423,6 +554,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // adds .dvs-cat--disabled + aria-disabled.
     const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
     await page.goto(`/c/${AUTH}/profile`)
+    await demoMark(page, 'PROFILE-FIN-DISABLED — open a known authority profile')
     await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 15_000 })
     // The probe runs in parallel with the rest of the page; give it
     // up to 15s to resolve before asserting the disabled state.
@@ -430,6 +562,7 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(finCat).toBeVisible()
     await expect(finCat).toHaveClass(/dvs-cat--disabled/, { timeout: 15_000 })
     await expect(finCat).toHaveAttribute('aria-disabled', 'true')
+    await demoMark(page, 'Financials tab carries .dvs-cat--disabled + aria-disabled ✓', 2000)
 
     // Clicking must NOT navigate away from the profile view (the
     // browser would otherwise rewrite the URL via the data-view
@@ -437,6 +570,7 @@ test.describe.serial('Production Smoke Tests', () => {
     await finCat.click({ force: true })
     await page.waitForTimeout(300)
     expect(new URL(page.url()).pathname).toBe(`/c/${AUTH}/profile`)
+    await demoMark(page, 'Clicking the disabled tab does nothing ✓', 2000)
   })
 
   test('PROFILE-ANALYSIS-GONE: the Analysis tab is removed from the profile UI', async ({ page }) => {
@@ -446,12 +580,15 @@ test.describe.serial('Production Smoke Tests', () => {
     // /c/<ticker>/gmr-long still mounts the panel — only the tab
     // is gone from the UI.
     await page.goto('/c/AAPL/profile')
+    await demoMark(page, 'PROFILE-ANALYSIS-GONE — open /c/AAPL/profile')
     await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('[data-testid="view-cat-analysis"]')).toHaveCount(0)
+    await demoMark(page, 'view-cat-analysis is gone from the tab strip ✓', 2000)
     // Sanity: other categories are still there.
     await expect(page.locator('[data-testid="view-cat-overview"]')).toBeVisible()
     await expect(page.locator('[data-testid="view-cat-financials"]')).toBeVisible()
     await expect(page.locator('[data-testid="view-cat-procurement"]')).toBeVisible()
+    await demoMark(page, 'Overview / Financials / Procurement still wired ✓', 2000)
   })
 
   // ── Report Lifecycle (all via UI) ──────────────────────────────
