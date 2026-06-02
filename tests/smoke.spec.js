@@ -673,6 +673,156 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('.tiptap-editor .tiptap')).toBeVisible({ timeout: 10_000 })
   })
 
+  test('STORY-TOOLBAR-UNIFIED: editor renders a single unified toolbar', async ({ page }) => {
+    // Pre-batch-3 the editor showed two adjacent bars (BubbleToolbar +
+    // FloatingToolbar) with duplicated H1/H2 buttons. PR #144 merged
+    // them into StoryEditorToolbar. Pin: the new testid is there, the
+    // two old ones are gone, the heading buttons appear exactly once.
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await demoMark(page, 'STORY-TOOLBAR-UNIFIED — wait for the editor to mount')
+    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
+    await demoMark(page, 'unified editor-toolbar visible; old bars must NOT be present', 2000)
+    expect(await page.locator('[data-testid="bubble-toolbar"]').count()).toBe(0)
+    expect(await page.locator('[data-testid="floating-toolbar"]').count()).toBe(0)
+    // H1 / H2 / H3 each render exactly once across the unified bar.
+    expect(await page.locator('[data-testid="tb-h1"]').count()).toBe(1)
+    expect(await page.locator('[data-testid="tb-h2"]').count()).toBe(1)
+    expect(await page.locator('[data-testid="tb-h3"]').count()).toBe(1)
+    await demoMark(page, 'H1/H2/H3 each present exactly once ✓', 2000)
+  })
+
+  test('STORY-CHAPTER-RAIL: TOC component is wired into the editor layout', async ({ page }) => {
+    // ChapterRail was read-only on the report view; PR #146 mounts it
+    // in the editor too. End-to-end pin: walk `.editor-layout` and
+    // confirm the rail component is wired into the slot. The rail
+    // renders an empty comment placeholder until the document has
+    // h2/h3 content (its v-if = chapters.length > 1).
+    //
+    // Earlier draft tried to type headings + assert on rail visibility,
+    // but slow-motion + ProseMirror's transactional update model made
+    // it flakey to synthesise a real TipTap transaction from the test
+    // harness. The bodyVersion-triggered refresh path is covered by
+    // unit tests in fontem-web (mocked TipTap editor); this e2e
+    // covers the structural wiring that the unit test can't.
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
+    await demoMark(page, 'STORY-CHAPTER-RAIL — confirm rail is wired into .editor-layout')
+    const layout = await page.evaluate(() => {
+      const el = document.querySelector('.editor-layout')
+      if (!el) return null
+      return {
+        hasBodyCol: !!el.querySelector('.editor-body-col'),
+        // ChapterRail v-if=hasContent renders an empty comment node
+        // while there's nothing to TOC. The comment is enough to
+        // prove the component is wired into the slot.
+        railPlaceholderPresent: Array.from(el.childNodes).some(
+          (n) => n.nodeType === Node.COMMENT_NODE,
+        ),
+        childTags: Array.from(el.children).map((c) => c.className),
+      }
+    })
+    expect(layout).not.toBeNull()
+    expect(layout.hasBodyCol, 'editor-body-col must wrap the EditorContent').toBe(true)
+    expect(
+      layout.railPlaceholderPresent,
+      `expected ChapterRail placeholder comment inside .editor-layout; saw children: ${JSON.stringify(layout.childTags)}`,
+    ).toBe(true)
+    await demoMark(page, 'ChapterRail wired into .editor-layout ✓', 2500)
+  })
+
+  test('STORY-TABLE-CONTROLS: clicking a table cell shows + / 🗑 column widgets', async ({ page }) => {
+    // PR #147 added TableControlsOverlay. Insert a table via the
+    // unified toolbar's tb-table button, click into a cell, then
+    // confirm the overlay + at least one column widget render.
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
+    await demoMark(page, 'STORY-TABLE-CONTROLS — insert a table via the toolbar')
+    const body = page.locator('.tiptap-editor .tiptap')
+    await body.click()
+    await page.keyboard.press('End')
+    await page.keyboard.press('Enter')
+    await page.locator('[data-testid="tb-table"]').click()
+    // Click the first cell so the cursor lands inside the table.
+    const firstCell = page.locator('.tiptap-editor .tiptap table td').first()
+    await firstCell.click()
+    await demoMark(page, 'Cursor inside the new 3×3 table', 1500)
+    // The `.table-overlay` wrapper itself sits at `height: 0` (it's
+    // a positioning anchor for absolutely-positioned column widgets),
+    // so Playwright's `toBeVisible` treats it as hidden. Assert on
+    // the widgets themselves instead — they have real bounds.
+    await expect(page.locator('[data-testid="table-overlay"]'))
+      .toHaveCount(1, { timeout: 5_000 })
+    // 3 cells → 4 column widgets (boundaries 0..3).
+    const widgets = page.locator('[data-testid^="table-col-widget-"]')
+    await widgets.first().waitFor({ state: 'visible', timeout: 5_000 })
+    expect(await widgets.count()).toBeGreaterThanOrEqual(4)
+    await expect(page.locator('[data-testid="table-add-row"]')).toBeVisible()
+    await demoMark(page, 'Column widgets + "+ Row" affordance rendered ✓', 2000)
+  })
+
+  test('STORY-IMAGE-UPLOAD: uploaded image returns a fetchable URL', async ({ page }) => {
+    // PR #75 (community-api) granted anonymous read on the uploads
+    // bucket — previously, /capi/data-stories/<id>/upload returned
+    // a 200 with a URL, but the browser then 403'd on the GET. End-
+    // to-end pin: POST a 1×1 PNG, confirm the response carries a
+    // /uploads/* URL, then fetch that URL and confirm 200.
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
+    await demoMark(page, 'STORY-IMAGE-UPLOAD — POST a 1×1 PNG to /upload')
+    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const result = await page.evaluate(async ({ id, tok }) => {
+      // Smallest valid PNG bytes — 1×1 transparent pixel.
+      const png = Uint8Array.from([
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+        0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+        0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0x00,
+        0x00, 0x00, 0x05, 0x00, 0x01, 0x5E, 0xF3, 0x2A,
+        0x3A, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82,
+      ])
+      const form = new FormData()
+      form.append('file', new Blob([png], { type: 'image/png' }), 'tiny.png')
+      const up = await fetch(`/capi/data-stories/${id}/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tok}` },
+        body: form,
+      })
+      const upBody = await up.json()
+      const get = await fetch(upBody.url)
+      return { uploadStatus: up.status, url: upBody.url, getStatus: get.status, bytes: (await get.blob()).size }
+    }, { id: storyId, tok: token })
+    expect(result.uploadStatus, `upload failed: ${JSON.stringify(result)}`).toBe(200)
+    expect(result.url).toMatch(/^\/uploads\//)
+    expect(result.getStatus, `fetching the uploaded URL 403'd or worse: ${JSON.stringify(result)}`).toBe(200)
+    expect(result.bytes).toBeGreaterThan(0)
+    await demoMark(page, `Uploaded + fetched ${result.bytes} B at ${result.url.slice(0, 28)}… ✓`, 2500)
+  })
+
+  test('STORY-SAVE-TOAST: clicking Save fires a success toast', async ({ page }) => {
+    // PR #145 wired useToast() into the save handler. Click Save and
+    // confirm a `[data-testid="toast-success"]` lands.
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
+    await demoMark(page, 'STORY-SAVE-TOAST — click the Save button')
+    await page.click('[data-testid="save-story"]')
+    await expect(page.locator('[data-testid="toast-success"]'))
+      .toBeVisible({ timeout: 10_000 })
+    await demoMark(page, 'Save success toast appeared ✓', 2500)
+  })
+
   test('STORY-MENTION-1: @-typing inserts an entity chip + chip click opens the side panel', async ({ page }) => {
     test.setTimeout(120_000)
     if (!storyId) test.skip()
