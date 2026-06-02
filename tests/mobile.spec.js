@@ -104,8 +104,8 @@ test.describe.serial('Mobile Smoke Suite', () => {
   })
 
   test('MOBILE-4: contracts panel switches to the card list (not the table) on narrow widths', async ({ page }) => {
-    // gitleaks:allow — public authority_id (Danish Ministry of Defence)
-    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8'
+
+    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
     await page.goto(`/c/${AUTH}/contracts`)
     await demoMark(page, 'MOBILE-4 — open contracts on a mobile-narrow viewport')
     await expect(page.locator('[data-testid="contracts-panel"]').first())
