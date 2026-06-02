@@ -823,6 +823,70 @@ test.describe.serial('Production Smoke Tests', () => {
     await demoMark(page, 'Save success toast appeared ✓', 2500)
   })
 
+  test('STORY-TABLE-ROW-TRASH: per-row trash buttons render to the left of each row', async ({ page }) => {
+    // PR #149 adds a 🗑 button to the left of each <tr> in the
+    // active-table overlay. Insert a table, click into a cell, then
+    // confirm one row-trash button per row is rendered.
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
+    await demoMark(page, 'STORY-TABLE-ROW-TRASH — insert a table')
+    const body = page.locator('.tiptap-editor .tiptap')
+    await body.click()
+    await page.keyboard.press('End')
+    await page.keyboard.press('Enter')
+    await page.locator('[data-testid="tb-table"]').click()
+    await page.locator('.tiptap-editor .tiptap table td').first().click()
+    await demoMark(page, 'Cursor inside the new 3×3 table', 1500)
+    // Default TipTap table is 3 rows (header + 2 body) × 3 cols.
+    const rowTrash = page.locator('[data-testid^="table-row-del-"]')
+    await rowTrash.first().waitFor({ state: 'visible', timeout: 5_000 })
+    expect(await rowTrash.count()).toBeGreaterThanOrEqual(3)
+    await demoMark(page, `${await rowTrash.count()} row-trash buttons rendered ✓`, 2500)
+  })
+
+  test('STORY-TABLE-LAST-DELETES-TABLE: deleting the last column drops the whole table', async ({ page }) => {
+    // PR #149 changes the column-trash behaviour so that deleting the
+    // *last* remaining column calls editor.deleteTable() instead of
+    // editor.deleteColumn() — the TipTap schema doesn't allow a
+    // 0-column table. Insert a table, delete columns until one is left,
+    // then click the last column-trash and confirm the table is gone.
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
+    await demoMark(page, 'STORY-TABLE-LAST-DELETES-TABLE — insert a table')
+    const body = page.locator('.tiptap-editor .tiptap')
+    await body.click()
+    await page.keyboard.press('End')
+    await page.keyboard.press('Enter')
+    await page.locator('[data-testid="tb-table"]').click()
+    await page.locator('.tiptap-editor .tiptap table td').first().click()
+    const table = page.locator('.tiptap-editor .tiptap table')
+    await expect(table).toBeVisible()
+
+    // Boundary trash widgets exist for i=1..N (no trash at i=0).
+    // Strip columns from the right until one remains by repeatedly
+    // clicking the highest-index trash currently rendered.
+    for (let safety = 0; safety < 6; safety++) {
+      const widgets = await page.locator('[data-testid^="table-col-widget-"]').count()
+      if (widgets <= 2) break  // 1 column → 2 boundaries (left + right)
+      // Click the rightmost trash (boundary widgets-1, i.e. the gap at
+      // the right edge — deletes the column to its left).
+      await page.locator(`[data-testid="table-col-del-${widgets - 1}"]`).click()
+      // Re-anchor selection inside the surviving table to keep the
+      // overlay visible.
+      await page.locator('.tiptap-editor .tiptap table td').first().click()
+    }
+    await demoMark(page, 'Down to 1 column — click the last trash', 1500)
+    // Exactly one trash button should remain (at boundary 1) — click
+    // it. The whole table should vanish.
+    await page.locator('[data-testid="table-col-del-1"]').click()
+    await expect(table).toHaveCount(0, { timeout: 5_000 })
+    await demoMark(page, 'Table deleted when last column was removed ✓', 2500)
+  })
+
   test('STORY-MENTION-1: @-typing inserts an entity chip + chip click opens the side panel', async ({ page }) => {
     test.setTimeout(120_000)
     if (!storyId) test.skip()

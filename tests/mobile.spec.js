@@ -194,6 +194,76 @@ test.describe.serial('Mobile Smoke Suite', () => {
     await demoMark(page, `Form padding-bottom after dismiss: ${paddedAfter}px (was ${paddedBefore}px) ✓`, 2500)
   })
 
+  test('MOBILE-7: AssistPanel publishes --visible-vh and reads it as its own height', async ({ page }) => {
+    // PR #148 introduced useVisibleViewportHeight(). The composable
+    // subscribes to window.visualViewport's resize+scroll events and
+    // publishes the current visible-viewport height to a CSS custom
+    // property `--visible-vh` on <html>. The .assist-panel rule then
+    // reads it as `height: var(--visible-vh, 100dvh)` so the input
+    // row stays reachable on Android Chrome — where bare 100vh
+    // resolves to the *layout* viewport (largest possible, with
+    // chrome hidden) rather than the visible one.
+    //
+    // Playwright's emulated iPhone-13 viewport doesn't reproduce the
+    // address-bar collapse, so we can't repro the bug end-to-end —
+    // but we CAN pin the wiring: when the panel is open, `--visible-vh`
+    // is published, equals `window.visualViewport.height`, and the
+    // panel's computed height is exactly that.
+    if (!storyId) test.skip()
+    await clearCookieConsent(page)
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 30_000 })
+
+    // Dismiss the cookie banner so the AssistPanel's input padding
+    // collapses to its baseline (otherwise the input bottom sits
+    // above the panel bottom by the banner's height, and our
+    // assertion below would need to factor that in).
+    await page.click('[data-testid="cookie-consent-accept"]').catch(() => {})
+
+    await demoMark(page, 'MOBILE-7 — open the AssistPanel')
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-input"]')).toBeVisible({ timeout: 5_000 })
+
+    // 1. --visible-vh is published to <html>
+    await page.waitForFunction(
+      () => getComputedStyle(document.documentElement)
+        .getPropertyValue('--visible-vh').trim() !== '',
+      undefined, { timeout: 3_000 },
+    )
+
+    // 2. The published value matches window.visualViewport.height (px)
+    const { cssVar, vvHeight, panelHeight, panelBottom, viewportH } = await page.evaluate(() => {
+      const css = getComputedStyle(document.documentElement)
+        .getPropertyValue('--visible-vh').trim()
+      const panel = document.querySelector('[data-testid="assist-panel"]')
+      const r = panel.getBoundingClientRect()
+      return {
+        cssVar: css,
+        vvHeight: window.visualViewport?.height,
+        panelHeight: Math.round(r.height),
+        panelBottom: Math.round(r.bottom),
+        viewportH: window.innerHeight,
+      }
+    })
+    expect(cssVar, '--visible-vh should carry the visualViewport height').toMatch(/^\d+(\.\d+)?px$/)
+    expect(parseFloat(cssVar)).toBeCloseTo(vvHeight, 0)
+
+    // 3. The panel height equals --visible-vh minus the 3rem (48 px) top
+    // offset, give or take a px for sub-pixel rounding. Confirms the CSS
+    // rule `height: calc(var(--visible-vh) - 3rem)` is in effect.
+    const expectedPanelHeight = parseFloat(cssVar) - 48
+    expect(Math.abs(panelHeight - expectedPanelHeight)).toBeLessThanOrEqual(1)
+
+    // 4. The panel's bottom is within 1 px of the visible viewport
+    // bottom — i.e. the input row is reachable, not pushed off-screen.
+    expect(Math.abs(panelBottom - viewportH)).toBeLessThanOrEqual(1)
+    await demoMark(
+      page,
+      `--visible-vh=${cssVar}, panel ${panelHeight}px tall, bottom@${panelBottom} ≈ vp${viewportH} ✓`,
+      2500,
+    )
+  })
+
   test('MOBILE-CLEANUP: delete the test story', async ({ page }) => {
     if (!storyId) test.skip()
     await page.goto('/my-stories')
