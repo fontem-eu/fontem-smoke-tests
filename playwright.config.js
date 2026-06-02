@@ -31,7 +31,21 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      // Desktop suite stays on tests/{smoke,auth-helper,consolidator}.spec.js
+      // — the mobile spec is opted out via the matcher below.
+      testMatch: /(smoke|auth-helper|consolidator)\.spec\.js$/,
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'mobile-chromium',
+      // Focused mobile suite. Smaller set of tests targeting the
+      // 390 × 844 iPhone-13 viewport — most desktop assertions are
+      // shape-equivalent on mobile, so we don't duplicate them
+      // here. The mobile spec covers the things the desktop suite
+      // CAN'T see: cookie-banner / chat-input overlap, mobile dropdown
+      // nav, narrow contracts-cards rendering.
+      testMatch: /mobile\.spec\.js$/,
+      use: { ...devices['iPhone 13'] },
     },
   ],
 })
