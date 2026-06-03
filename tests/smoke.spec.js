@@ -83,6 +83,120 @@ test.describe.serial('Production Smoke Tests', () => {
 
   // ── Authentication ─────────────────────────────────────────────
 
+  test('NAV-EXPLORE: top nav has Explore between Map and My Stories, hub links to Data Quality', async ({ page }) => {
+    // Batch-5 item 5: the user asked for an Explore top-level tab that
+    // groups the data-quality dashboards (and other browse-by-source
+    // surfaces) under one nav entry.
+    await page.goto('/')
+    await demoMark(page, 'NAV-EXPLORE — verify the new top-level tab')
+    const explore = page.locator('[data-testid="nav-explore"]')
+    await expect(explore).toBeVisible({ timeout: 10_000 })
+    await expect(explore).toHaveAttribute('href', '/explore')
+    // Order: Map → Explore → (My Stories if authed). Pin Explore's
+    // position relative to Map by index.
+    const navHrefs = await page.locator('[data-testid^="nav-"]').evaluateAll(
+      (els) => els.map((e) => e.getAttribute('href')),
+    )
+    const mapIdx = navHrefs.indexOf('/map')
+    const explIdx = navHrefs.indexOf('/explore')
+    expect(explIdx).toBeGreaterThan(mapIdx)
+    await demoMark(page, 'Explore tab sits between Map and My Stories ✓', 2000)
+
+    // Click into the hub — the Data Quality card lands on /data-quality.
+    await explore.click()
+    await expect(page.locator('[data-testid="explore-view"]')).toBeVisible({ timeout: 10_000 })
+    const dqCard = page.locator('[data-testid="explore-card-data-quality"]')
+    await expect(dqCard).toBeVisible()
+    await dqCard.click()
+    await page.waitForURL('**/data-quality', { timeout: 10_000 })
+    await demoMark(page, 'Explore → Data Quality card opens the hub ✓', 2500)
+  })
+
+  test('FEED-TAG-PERSIST: a tag filter survives entering and leaving a story', async ({ page }) => {
+    // Batch-5 item 1: the user filters the feed by tag, enters a story,
+    // comes back, and expects the same filter to still be on. PR
+    // fontem-web #150 persists the active tag in localStorage and
+    // restores it on mount when no ?tag= is in the URL.
+    //
+    // Seed the data if no tags exist yet: create a story, tag it,
+    // publish it. Self-seeding keeps this test runnable on a fresh
+    // testing env where nothing is tagged yet.
+    await uiLogin(page)
+    const seedTag = `smoke-${RUN_ID.slice(-8)}`
+    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const seededId = await page.evaluate(async ({ tag, tok }) => {
+      // POST /data-stories accepts only title/abstract/parent_id — the
+      // visibility lives on the PUT update endpoint. So we create
+      // private, flip to public_open, then attach the tag.
+      const create = await fetch('/capi/data-stories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({
+          title: `Persist Tag Seed ${Date.now()}`,
+          abstract: 'Self-seeded story so FEED-TAG-PERSIST has something to filter.',
+        }),
+      })
+      if (!create.ok) return null
+      const story = await create.json()
+      const id = story.id
+      await fetch(`/capi/data-stories/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({
+          title: story.title,
+          abstract: story.abstract,
+          visibility: 'public_open',
+        }),
+      })
+      await fetch(`/capi/data-stories/${id}/tags`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ tags: [tag] }),
+      })
+      return id
+    }, { tag: seedTag, tok: token })
+    expect(seededId, 'seeded story id').toBeTruthy()
+    await demoMark(page, `FEED-TAG-PERSIST — seeded "#${seedTag}" tag`)
+
+    // Navigate to the feed with no ?tag= query.
+    await page.goto('/')
+    await expect(page.locator('[data-testid="feed-tag-strip"]')).toBeVisible({ timeout: 10_000 })
+    // Click the chip for our seed tag.
+    await page.locator(`[data-testid="tag-chip-${seedTag}"]`).click()
+    await expect(page.locator('[data-testid="feed-active-filter"]')).toBeVisible({ timeout: 5_000 })
+    await demoMark(page, `Filtered by "${seedTag}"`, 1500)
+
+    // Confirm localStorage holds the tag (the persistence contract).
+    const stored = await page.evaluate(() => localStorage.getItem('gmr-stories-tag'))
+    expect(stored).toBe(seedTag)
+
+    // Open the seeded story card.
+    const card = page.locator(`[data-testid="feed-card-${seededId}"]`)
+    await expect(card).toBeVisible({ timeout: 5_000 })
+    await card.click()
+    await page.waitForURL(new RegExp(`/stories/${seededId}$`), { timeout: 10_000 })
+    await demoMark(page, 'Entered the seeded story', 1500)
+
+    // Go BACK to the feed via the global nav (Stories link), NOT the
+    // browser back button — that's the path that drops the URL query
+    // and was the original bug surface.
+    await page.locator('[data-testid="nav-stories"]').click()
+    await page.waitForURL(/\/(\?.*)?$/, { timeout: 10_000 })
+    // The persisted tag should be re-applied via router.replace, so
+    // the URL carries `?tag=<seedTag>` and the filter banner is back.
+    await expect(page).toHaveURL(new RegExp(`[?&]tag=${seedTag}(&|$)`), { timeout: 5_000 })
+    await expect(page.locator('[data-testid="feed-active-filter"]')).toBeVisible({ timeout: 5_000 })
+    await demoMark(page, `Filter restored on the way back ✓ (tag=${seedTag})`, 2500)
+
+    // Cleanup the seeded story so the env stays tidy.
+    await page.evaluate(async ({ id, tok }) => {
+      await fetch(`/capi/data-stories/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+    }, { id: seededId, tok: token })
+  })
+
   test('AUTH-01: Login page loads with form', async ({ page }) => {
     await clearSession(page)
     await expect(page.locator('[data-testid="login-email"]')).toBeVisible({ timeout: 10_000 })
@@ -546,31 +660,73 @@ test.describe.serial('Production Smoke Tests', () => {
     await demoMark(page, 'UUID never appears in the visible body text ✓', 2000)
   })
 
-  test('PROFILE-FIN-DISABLED: financials tab is greyed out on an authority profile', async ({ page }) => {
-    // Authorities never have financial statements; the tab now greys
-    // itself out for them. Picks a known authority UUID (Danish
-    // Ministry of Defence Acquisition) — a probe via /api/fundamentals
-    // returns 404, HomeView flips the disabled flag, DataViewSelector
-    // adds .dvs-cat--disabled + aria-disabled.
+  test('PROFILE-FIN-HIDDEN: financials tab is HIDDEN entirely on an authority profile', async ({ page }) => {
+    // Batch-5 item 2: the user reported greyed-out Financials + Analysis
+    // tabs on an authority profile are dead UI. PR fontem-web #151
+    // changes the gate from "grey out" to "drop the whole group" when
+    // TickerFinancials emits company-resolved with kind:'authority'.
     const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
     await page.goto(`/c/${AUTH}/profile`)
-    await demoMark(page, 'PROFILE-FIN-DISABLED — open a known authority profile')
+    await demoMark(page, 'PROFILE-FIN-HIDDEN — open a known authority profile')
     await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 15_000 })
-    // The probe runs in parallel with the rest of the page; give it
-    // up to 15s to resolve before asserting the disabled state.
-    const finCat = page.locator('[data-testid="view-cat-financials"]')
-    await expect(finCat).toBeVisible()
-    await expect(finCat).toHaveClass(/dvs-cat--disabled/, { timeout: 15_000 })
-    await expect(finCat).toHaveAttribute('aria-disabled', 'true')
-    await demoMark(page, 'Financials tab carries .dvs-cat--disabled + aria-disabled ✓', 2000)
 
-    // Clicking must NOT navigate away from the profile view (the
-    // browser would otherwise rewrite the URL via the data-view
-    // selector emit). After a click the route stays on /profile.
-    await finCat.click({ force: true })
-    await page.waitForTimeout(300)
-    expect(new URL(page.url()).pathname).toBe(`/c/${AUTH}/profile`)
-    await demoMark(page, 'Clicking the disabled tab does nothing ✓', 2000)
+    // Give the resolver up to 15s to identify the entity as an authority
+    // and re-emit the view list. Once it does, view-cat-financials is
+    // gone from the strip entirely (not greyed, not aria-disabled).
+    await expect(page.locator('[data-testid="view-cat-financials"]'))
+      .toHaveCount(0, { timeout: 15_000 })
+    await demoMark(page, 'Financials tab is gone (not greyed) ✓', 2000)
+    // Sanity: the other groups are still there.
+    await expect(page.locator('[data-testid="view-cat-overview"]')).toBeVisible()
+    await expect(page.locator('[data-testid="view-cat-procurement"]')).toBeVisible()
+  })
+
+  test('PROFILE-AUTHORITY-NAME: authority profile header shows the name, never the UUID', async ({ page }) => {
+    // Batch-5 item 3: /api/companies/<UUID> returns 200 with
+    // company_name: null for an authority UUID (it's a stub, not 404).
+    // The old resolver short-circuited on the truthy stub and never
+    // reached /api/authorities/, so the header fell back to rendering
+    // the raw UUID. PR fontem-web #151 fixes the guard.
+    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
+    await page.goto(`/c/${AUTH}/profile`)
+    await demoMark(page, `PROFILE-AUTHORITY-NAME — open /c/${AUTH.slice(0, 8)}…/profile`)
+    await expect(page.locator('[data-testid="financials-panel"]')).toBeVisible({ timeout: 20_000 })
+
+    // Wait for the resolver round-trip — the header should land on the
+    // authority's actual name. We don't know the exact name across
+    // staging seeds, so just assert it's *some* non-UUID string with
+    // letters. The hard contract is the next line: the UUID must not
+    // appear in the body.
+    const title = page.locator('[data-testid="financials-title"]')
+    await expect(title).not.toHaveText(/^[0-9a-f-]+$/i, { timeout: 15_000 })
+    await expect(title).toHaveText(/[A-Za-z]{3,}/, { timeout: 5_000 })
+    await demoMark(page, 'Title resolves to the authority name ✓', 2000)
+
+    const bodyText = await page.locator('body').innerText()
+    expect(bodyText).not.toContain(AUTH)
+    await demoMark(page, 'UUID never appears in the visible body text ✓', 2000)
+  })
+
+  test('PROFILE-CONTRACTS-CONTRACTOR-HEADER: authority contracts list labels the column "Contractor"', async ({ page }) => {
+    // Batch-5 item 4: on an authority profile the contracts column was
+    // labelled "Authority", but the awarding side of the contract is
+    // the authority itself — what the user wants there is the COMPANY
+    // that provided the service. ContractsPanel now accepts an
+    // entityKind prop (and falls back to row-shape detection).
+    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
+    await page.goto(`/c/${AUTH}/contracts`)
+    await demoMark(page, 'PROFILE-CONTRACTS-CONTRACTOR-HEADER — open the contracts view')
+    await expect(page.locator('[data-testid="contracts-panel"]')).toBeVisible({ timeout: 20_000 })
+
+    // Once contracts land, the column header reads "Contractor" — both
+    // forms of detection (entityKind prop + row-shape sniff) converge
+    // on the same label.
+    const table = page.locator('[data-testid="contracts-table"]')
+    await expect(table).toBeVisible({ timeout: 15_000 })
+    const headers = await table.locator('thead th').allTextContents()
+    expect(headers.some((h) => h.startsWith('Contractor'))).toBe(true)
+    expect(headers.some((h) => h.startsWith('Authority'))).toBe(false)
+    await demoMark(page, 'Counterparty column reads "Contractor" ✓', 2500)
   })
 
   test('PROFILE-ANALYSIS-GONE: the Analysis tab is removed from the profile UI', async ({ page }) => {
