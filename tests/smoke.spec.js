@@ -197,6 +197,102 @@ test.describe.serial('Production Smoke Tests', () => {
     }, { id: seededId, tok: token })
   })
 
+  test('DQ-FRESHNESS: data quality hub no longer shows "Source freshness unavailable: HTTP 404"', async ({ page }) => {
+    // Batch-6 item 2: the hub used to call `/api/data-quality/source-freshness`
+    // — a URL that never existed on the backend — and rendered a
+    // permanent error banner. fontem-web #153 repoints it at the live
+    // `/api/data-quality/freshness` endpoint and rewrites the section
+    // to consume the actual response shape.
+    await page.goto('/data-quality')
+    await demoMark(page, 'DQ-FRESHNESS — open /data-quality')
+
+    await expect(page.locator('[data-testid="dqh-freshness-error"]'))
+      .toHaveCount(0, { timeout: 10_000 })
+    // Belt + braces — the legacy error string isn't anywhere on the
+    // page either.
+    await expect(page.locator('body'))
+      .not.toContainText(/Source freshness unavailable: HTTP 404/i)
+    await demoMark(page, 'No "Source freshness unavailable: HTTP 404" banner ✓', 2500)
+  })
+
+  test('DQ-TRIPLES: triple-store dashboard no longer 500s; renders either real data or the unconfigured state', async ({ page }) => {
+    // Batch-6 item 3: the Virtuoso `COUNT(*)` query blew past the 10s
+    // httpx timeout on prod and the resulting ReadTimeout 500'd the
+    // panel. fontem-api PR #189 bumps the default to 60s + catches the
+    // typed `SparqlTimeout` for a graceful response.
+    await page.goto('/data-quality/triples')
+    await demoMark(page, 'DQ-TRIPLES — open /data-quality/triples')
+    await expect(page.locator('[data-testid="triples-dq-error"]'))
+      .toHaveCount(0, { timeout: 10_000 })
+    const unconfigured = await page.locator('[data-testid="triples-dq-unconfigured"]').count()
+    if (unconfigured) {
+      await demoMark(page, 'Virtuoso not configured on testing — graceful empty state ✓', 2500)
+    } else {
+      await demoMark(page, 'Triple-store inventory renders ✓', 2500)
+    }
+  })
+
+  test('SPARQL-EDITOR: /sparql shows an editable textarea + Run button that POSTs to /api/sparql', async ({ page }) => {
+    // Batch-6 item 1: SparqlView used to be a doc-only page; the user
+    // wanted an actual editable surface they could query from. fontem-
+    // web #154 + fontem-api #189 add the editor + backend.
+    await page.goto('/sparql')
+    await demoMark(page, 'SPARQL-EDITOR — open /sparql')
+
+    const editor = page.locator('[data-testid="sparql-editor"]')
+    const runBtn = page.locator('[data-testid="sparql-run"]')
+    await expect(editor).toBeVisible({ timeout: 10_000 })
+    await expect(runBtn).toBeVisible()
+
+    const initialQuery = await editor.inputValue()
+    expect(initialQuery.toUpperCase()).toContain('SELECT')
+    await demoMark(page, 'Editor pre-populated with an inventory query ✓', 1500)
+
+    await expect(page.locator('[data-testid="sparql-endpoint-url"]'))
+      .toContainText('/api/sparql')
+
+    // Hit Run. Possible outcomes:
+    //  - 200 + results table (Virtuoso reachable on testing)
+    //  - 503 + error banner (Virtuoso unconfigured — testing default)
+    // Either is a valid pass; the contract is that after a click,
+    // one of {results, error} renders within 30s and the Run button
+    // re-enables. Critically — NOT an indefinite spinner or a hidden
+    // 500.
+    await runBtn.click()
+    await Promise.race([
+      page.locator('[data-testid="sparql-results"]').waitFor({ timeout: 30_000 }),
+      page.locator('[data-testid="sparql-error"]').waitFor({ timeout: 30_000 }),
+    ])
+    await expect(runBtn).toBeEnabled({ timeout: 5_000 })
+
+    const errorVisible = await page.locator('[data-testid="sparql-error"]').isVisible().catch(() => false)
+    if (errorVisible) {
+      const detail = await page.locator('[data-testid="sparql-error"]').innerText()
+      // The 503 detail message names Virtuoso explicitly when it's
+      // unconfigured on testing — pin that so a hidden 500 can't pass.
+      expect(detail).toMatch(/Virtuoso|timed out|SPARQL/i)
+      await demoMark(page, `Backend error surfaced: ${detail.slice(0, 60)}…`, 2500)
+    } else {
+      await expect(page.locator('[data-testid="sparql-results"] thead th').first()).toBeVisible()
+      await demoMark(page, 'Query results rendered ✓', 2500)
+    }
+  })
+
+  test('SPARQL-EXAMPLE-LOADER: clicking a "Use this query" button replaces the editor content', async ({ page }) => {
+    // Batch-6 item 1 (sub-contract): every example query carries a
+    // "Use this query →" button that drops the example into the
+    // editor for the user to edit / run.
+    await page.goto('/sparql')
+    const editor = page.locator('[data-testid="sparql-editor"]')
+    await expect(editor).toBeVisible({ timeout: 10_000 })
+    const before = await editor.inputValue()
+    await page.locator('[data-testid="sparql-example-load-1"]').click()
+    const after = await editor.inputValue()
+    expect(after).not.toBe(before)
+    expect(after.toLowerCase()).toContain('schema:name')
+    await demoMark(page, 'Example query loaded into editor ✓', 2000)
+  })
+
   test('AUTH-01: Login page loads with form', async ({ page }) => {
     await clearSession(page)
     await expect(page.locator('[data-testid="login-email"]')).toBeVisible({ timeout: 10_000 })
