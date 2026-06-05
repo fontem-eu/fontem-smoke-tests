@@ -412,11 +412,15 @@ test.describe.serial('Production Smoke Tests', () => {
     await tableLink.waitFor({ state: 'visible', timeout: 20_000 })
 
     // The link must:
-    //   - point at ted.europa.eu (real domain, not a stub)
+    //   - go through the fontem-api redirect endpoint, which
+    //     translates the eForms UUID we store as ted_notice_id into
+    //     TED's publication-number. Hitting ted.europa.eu directly
+    //     with the UUID returns HTTP 202 + empty body (blank page)
+    //     because TED's portal keys notices by publication-number.
     //   - open in a new tab (target=_blank, rel=noopener)
     //   - be rendered for every row, not just rows with explicit ted_url
     const href = await tableLink.getAttribute('href')
-    expect(href).toMatch(/^https:\/\/ted\.europa\.eu\//)
+    expect(href).toMatch(/^\/api\/contracts\/[^/]+\/ted-link$/)
     expect(await tableLink.getAttribute('target')).toBe('_blank')
     expect(await tableLink.getAttribute('rel')).toContain('noopener')
 
@@ -427,6 +431,94 @@ test.describe.serial('Production Smoke Tests', () => {
     // fallback URL builder makes it impossible to miss any row that
     // has a ted_notice_id, which is required at upsert time.
     expect(linkCount).toBe(rowCount)
+  })
+
+  test('PROC-TED-LINK-CONTENT: clicking a contract TED link lands on a page about that contract', async ({ page, context }) => {
+    // User-reported regression: TED links opened a blank page because
+    // we were sending TED its own portal URL keyed by the eForms UUID,
+    // and TED keys notices by publication-number. The fix routes the
+    // link through fontem-api's /api/contracts/<id>/ted-link redirect,
+    // which calls TED's v3 search API to translate UUID → pub-number,
+    // then 302s to the canonical detail URL.
+    //
+    // PROC-TED-LINK above pins the in-page href shape (cheap, runs
+    // every smoke pass). This test does the harder thing the user
+    // explicitly asked for: actually click the link, follow the 302
+    // to TED, and assert the destination page is about *this*
+    // contract — not a generic landing page, not a 404, not blank.
+    //
+    // We assert on the contract's title text (which TED echoes
+    // verbatim in its notice header), because the title is the
+    // strongest semantic match available — values get rounded, dates
+    // get reformatted, buyer names get translated, but the procurement
+    // title round-trips byte-for-byte from the eForms XML.
+    await page.goto('/')
+    await demoMark(page, 'PROC-TED-LINK-CONTENT — search for Siemens AG')
+    const searchInput = page.locator('input[type="search"]').first()
+    await searchInput.fill('Siemens AG')
+    await expect(page.locator('.gmr-card').first()).toBeVisible({ timeout: 10_000 })
+    await page.locator('.gmr-card').first().click()
+    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 10_000 })
+
+    await demoMark(page, 'Open Procurement → Contracts')
+    const procCat = page.locator('[data-testid="view-cat-procurement"]').first()
+    if (await procCat.isVisible().catch(() => false)) await procCat.click()
+    const contractsTab = page.locator('[data-testid="view-tab-contracts"]').first()
+    if (await contractsTab.isVisible().catch(() => false)) await contractsTab.click()
+    await expect(page.locator('[data-testid="contracts-panel"]').first())
+      .toBeVisible({ timeout: 20_000 })
+
+    // Pull the first row's title text BEFORE clicking — we'll match
+    // against this on the TED page. Use the in-app title link so the
+    // text we capture is exactly what the row renders.
+    const titleLink = page.locator('[data-testid^="contract-title-link-"]').first()
+    await titleLink.waitFor({ state: 'visible', timeout: 20_000 })
+    const contractTitle = (await titleLink.textContent() || '').trim()
+    expect(contractTitle.length).toBeGreaterThan(5)
+
+    await demoMark(page, `Click the TED link for "${contractTitle.slice(0, 60)}"`)
+
+    // Click opens target=_blank, so Playwright sees it as a new page
+    // on the same context. Race the popup event against the click so
+    // we don't miss the open. The popup follows the 302 from
+    // fontem-api → TED, so by the time waitForLoadState('load')
+    // returns we should be on ted.europa.eu.
+    const [popup] = await Promise.all([
+      context.waitForEvent('page', { timeout: 30_000 }),
+      titleLink.click(),
+    ])
+    // Give TED's page time to settle. TED's portal is heavily
+    // JS-rendered; 'load' isn't enough — we need at least one network
+    // idle moment so the notice body has actually painted.
+    await popup.waitForLoadState('domcontentloaded', { timeout: 30_000 })
+    await popup.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {
+      // TED sometimes keeps long-poll connections open. Don't fail the
+      // test on networkidle timeout — we'll assert on visible content
+      // next, which is the real gate.
+    })
+
+    // First-class assertion: we landed on TED itself, not the
+    // redirector and not the blank UUID-page.
+    expect(popup.url()).toMatch(/^https:\/\/ted\.europa\.eu\/.*\/notice\/-\/detail\/[^/]+/)
+    // The blank-page regression we're guarding against returned 0
+    // bytes of <body> content. Pin a non-trivial body to catch any
+    // future variant of the same bug.
+    const bodyText = (await popup.locator('body').innerText().catch(() => '')) || ''
+    expect(bodyText.length).toBeGreaterThan(200)
+
+    // Content match: the contract title should appear verbatim
+    // somewhere on the TED page. TED renders the title in <h1> for
+    // award notices, but we don't pin the tag — any visible text node
+    // is fine. Match on the first meaningful chunk (24 chars) to
+    // tolerate punctuation/whitespace drift between eForms XML and
+    // TED's rendered DOM, and to keep the assertion robust if TED
+    // truncates long titles in some viewports.
+    const titleChunk = contractTitle.slice(0, 24)
+    await expect(popup.locator(`text=${titleChunk}`).first())
+      .toBeVisible({ timeout: 20_000 })
+
+    await demoMark(page, 'TED page shows the contract title ✓', 2500)
+    await popup.close()
   })
 
   test('PROC-COUNTERPARTY-LINK: contracts rows link to the counterparty profile', async ({ page }) => {
