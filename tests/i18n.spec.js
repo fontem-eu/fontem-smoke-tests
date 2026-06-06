@@ -84,7 +84,7 @@ for (const loc of LOCALES) {
     // Open preferences → language picker → select the target locale.
     // The picker is a native <select>, so selectOption is enough.
     await page.getByTestId('prefs-menu-trigger').click()
-    await page.getByTestId('lang-picker').selectOption(loc.code)
+    await page.getByTestId("prefs-lang-picker").selectOption(loc.code)
 
     // The lang attribute on <html> is the synchronous side effect of
     // useLang.applyLang — a fast assertion that the switch fired
