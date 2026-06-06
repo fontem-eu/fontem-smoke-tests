@@ -31,9 +31,9 @@ const LOCALES = [
     code: 'fr',
     titleContains: 'Histoires de données publiques',
     feedSubContains: 'Histoires de données publiques',
-    pluralZero: 'aucun contrat',
-    pluralOne: '1 contrat',
-    pluralMany: '5 contrats',
+    pluralZero: 'aucun marché',
+    pluralOne: '1 marché',
+    pluralMany: '5 marchés',
   },
   {
     code: 'pt',
