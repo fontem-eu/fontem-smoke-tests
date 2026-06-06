@@ -30,7 +30,7 @@ spec:
             - name: regcred
           containers:
             - name: smoke
-              image: contribute.void42.internal/fontem/fontem-smoke-tests:v8b7b143
+              image: contribute.void42.internal/fontem/fontem-smoke-tests:v0b33e6e
               env:
                 - name: BASE_URL
                   value: "https://gmr.void42.net"
