@@ -233,6 +233,11 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('SPARQL-EDITOR: /sparql shows an editable textarea + Run button that POSTs to /api/sparql', async ({ page }) => {
+    // The default editor query (GROUP BY ?g across every named graph)
+    // is genuinely slow on populated stores — 30-45 s on staging — so
+    // we need more than the suite-default 60 s test timeout to wait
+    // out the API's 60 s ceiling without truncating the test.
+    test.setTimeout(120_000)
     // Batch-6 item 1: SparqlView used to be a doc-only page; the user
     // wanted an actual editable surface they could query from. fontem-
     // web #154 + fontem-api #189 add the editor + backend.
@@ -258,10 +263,19 @@ test.describe.serial('Production Smoke Tests', () => {
     // one of {results, error} renders within 30s and the Run button
     // re-enables. Critically — NOT an indefinite spinner or a hidden
     // 500.
+    //
+    // Wait window: the default query the editor ships with is a
+    // GROUP BY `?g` count over every `data.fontem.eu/graph/*` named
+    // graph. On a populated store (staging/prod) Virtuoso comfortably
+    // takes 30-45 s to walk every graph; the API's own ceiling is
+    // 60 s before it surfaces a 504. 65 s here covers both
+    // outcomes — slow-but-valid 200 and the API timeout 504 — so the
+    // test passes on environments with real data without inviting
+    // indefinite hangs.
     await runBtn.click()
     await Promise.race([
-      page.locator('[data-testid="sparql-results"]').waitFor({ timeout: 30_000 }),
-      page.locator('[data-testid="sparql-error"]').waitFor({ timeout: 30_000 }),
+      page.locator('[data-testid="sparql-results"]').waitFor({ timeout: 65_000 }),
+      page.locator('[data-testid="sparql-error"]').waitFor({ timeout: 65_000 }),
     ])
     await expect(runBtn).toBeEnabled({ timeout: 5_000 })
 
