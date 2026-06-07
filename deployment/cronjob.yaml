@@ -1,5 +1,5 @@
 ---
-# Smoke tests against PROD (gmr.void42.net) — all 22 tests including ASSIST
+# Smoke tests against PROD (www.fontem.eu) — all 22 tests including ASSIST
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -33,7 +33,7 @@ spec:
               image: contribute.void42.internal/fontem/fontem-smoke-tests:v77217cb
               env:
                 - name: BASE_URL
-                  value: "https://gmr.void42.net"
+                  value: "https://www.fontem.eu"
                 - name: TEST_EMAIL
                   valueFrom: { secretKeyRef: { name: gmr-smoke-creds, key: email } }
                 - name: TEST_PASSWORD
