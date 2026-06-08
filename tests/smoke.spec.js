@@ -1304,6 +1304,73 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="entity-side-panel"]')).toBeVisible({ timeout: 10_000 })
   })
 
+
+  test('STORY-FLOWERS-1: clicking the flower button gives a flower and increments the count', async ({ page }) => {
+    // The shared STORY-09 story is private by default, so flowers
+    // (which are public_open / public_auth only) won't accept it.
+    // Self-seed a fresh public_open story for this test so the
+    // assertion is independent of the shared chain AND safe to retry.
+    await uiLogin(page)
+    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    if (!token) test.skip()
+    const flowerStoryId = await page.evaluate(async ({ runId, tok }) => {
+      const r = await fetch('/capi/data-stories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ title: `Flower Smoke Story ${runId}`, abstract: 'Story under flower smoke test.' }),
+      })
+      if (!r.ok) throw new Error(`create story failed: ${r.status} ${await r.text()}`)
+      const { id } = await r.json()
+      // Flip to public_open so the flower endpoint will accept claps.
+      const v = await fetch(`/capi/data-stories/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ title: `Flower Smoke Story ${runId}`, abstract: 'Story under flower smoke test.', visibility: 'public_open' }),
+      })
+      if (!v.ok) throw new Error(`make-public failed: ${v.status} ${await v.text()}`)
+      return id
+    }, { runId: RUN_ID, tok: token })
+    expect(flowerStoryId).toBeTruthy()
+    await demoMark(page, `STORY-FLOWERS-1 — seeded story ${flowerStoryId.slice(-8)}`, 1500)
+
+    try {
+      await page.goto(`/stories/${flowerStoryId}`)
+      const btn = page.locator('[data-testid="flower-button"]')
+      const count = page.locator('[data-testid="flower-count"]')
+      // The button mounts inside .report-meta after the visibility
+      // badge — the GET on mount can take a beat on cold staging.
+      await expect(btn).toBeVisible({ timeout: 15_000 })
+      await expect(count).toBeVisible()
+      const before = parseInt(await count.textContent(), 10)
+      await demoMark(page, `Flower count before click: ${before}`, 1200)
+
+      // First click — optimistic + server reconcile. Asserting via
+      // toHaveText (not textContent twice) so Playwright auto-retries
+      // until Vue's reactivity tick lands.
+      await btn.click()
+      await expect(count).toHaveText(String(before + 1), { timeout: 5_000 })
+      await demoMark(page, `Flower count ${before} -> ${before + 1} ✓`, 1500)
+
+      // Persistence — reload, the server count must still show.
+      await page.reload({ waitUntil: 'networkidle' })
+      await expect(count).toHaveText(String(before + 1), { timeout: 10_000 })
+
+      // mine badge reflects the per-user count: "(you: 1)" / German
+      // "(du: 1)" / etc. We only assert the digit so the test stays
+      // locale-agnostic.
+      await expect(page.locator('[data-testid="flower-mine"]')).toContainText('1')
+    } finally {
+      // Always clean up — even if the assertions failed, leaving a
+      // public Smoke Story behind on prod is noise on the feed.
+      await page.evaluate(async ({ id, tok }) => {
+        await fetch(`/capi/data-stories/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${tok}` },
+        })
+      }, { id: flowerStoryId, tok: token })
+    }
+  })
+
   test('STORY-14: My Stories page shows the story', async ({ page }) => {
     await uiLogin(page)
     // /reports redirects to /my-stories since the nav restructure
