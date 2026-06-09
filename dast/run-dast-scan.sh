@@ -7,7 +7,7 @@
 # the HTML report to BookStack.
 #
 # Usage:  ./run-dast-scan.sh
-# Prereq: kubectl access to the gmr-dast namespace
+# Prereq: kubectl access to the fontem-dast namespace
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -18,7 +18,7 @@ set -euo pipefail
 # and the report never made it to BookStack.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-NAMESPACE="gmr-dast"
+NAMESPACE="fontem-dast"
 # Use the external ingress (HTTPS) as the traffic source for the DAST
 # scan — exactly what real users hit. The smoke tests' playwright
 # config already skips cert validation for *.void42.internal (private
@@ -30,8 +30,11 @@ BOOKSTACK_URL="http://bookstack.bookstack.svc.cluster.local"
 RUN_ID="run_$(date -u +%Y%m%d_%H%M)"
 
 # BookStack API credentials
-BOOKSTACK_TOKEN_ID=$(kubectl -n "$NAMESPACE" get secret bookstack-api -o jsonpath='{.data.token_id}' | base64 -d)
-BOOKSTACK_TOKEN_SECRET=$(kubectl -n "$NAMESPACE" get secret bookstack-api -o jsonpath='{.data.token_secret}' | base64 -d)
+# BookStack creds are optional: if the VaultStaticSecret for
+# bookstack-api hasn't synced (vault sealed, vault path drift, fresh
+# env), keep the report local instead of crashing the whole run.
+BOOKSTACK_TOKEN_ID=$(kubectl -n "$NAMESPACE" get secret bookstack-api -o jsonpath='{.data.token_id}' 2>/dev/null | base64 -d 2>/dev/null || true)
+BOOKSTACK_TOKEN_SECRET=$(kubectl -n "$NAMESPACE" get secret bookstack-api -o jsonpath='{.data.token_secret}' 2>/dev/null | base64 -d 2>/dev/null || true)
 BOOKSTACK_AUTH="Token ${BOOKSTACK_TOKEN_ID}:${BOOKSTACK_TOKEN_SECRET}"
 
 SMOKE_REPO="/config/repos/fontem-smoke-tests"
@@ -54,9 +57,19 @@ kubectl create job "$JOB_NAME" --from=cronjob/zap-dast -n "$NAMESPACE"
 kubectl -n "$NAMESPACE" patch svc zap --type merge \
     -p "{\"spec\":{\"selector\":{\"job-name\":\"${JOB_NAME}\"}}}"
 
+log "Waiting for ZAP pod to be created..."
+# `kubectl wait --for=condition=ready` fails fast with
+# "no matching resources found" if the pod doesn't exist yet at the
+# moment it runs. Poll briefly for the pod to appear before delegating
+# to the ready-wait.
+for i in $(seq 1 30); do
+    pods=$(kubectl -n "$NAMESPACE" get pods -l "job-name=${JOB_NAME}" --no-headers 2>/dev/null | wc -l)
+    [ "$pods" -gt 0 ] && break
+    sleep 2
+done
 log "Waiting for ZAP to be ready..."
 kubectl -n "$NAMESPACE" wait --for=condition=ready \
-    pod -l "job-name=${JOB_NAME}" --timeout=120s
+    pod -l "job-name=${JOB_NAME}" --timeout=180s
 
 # Wait for the ZAP API to respond
 for i in $(seq 1 120); do
@@ -153,18 +166,21 @@ log "Downloading HTML report..."
 curl -sf "http://${ZAP_SERVICE}/OTHER/core/other/htmlreport/" -o "$REPORT_FILE"
 
 # ── Phase 6: Upload to BookStack ─────────────────────────────
-log "Uploading report to BookStack..."
-BOOKSTACK_URL="$BOOKSTACK_URL" \
-BOOKSTACK_TOKEN_ID="$BOOKSTACK_TOKEN_ID" \
-BOOKSTACK_TOKEN_SECRET="$BOOKSTACK_TOKEN_SECRET" \
-    python3 "${SCRIPT_DIR}/upload-zap-report.py" \
-        "$REPORT_FILE" \
-        "http://${ZAP_SERVICE}" \
-        "$RUN_ID" \
-        "$TARGET_CAPI"
-
-log "ZAP phases complete — report uploaded to BookStack"
-rm -f "$REPORT_FILE"
+if [ -n "$BOOKSTACK_TOKEN_ID" ] && [ -n "$BOOKSTACK_TOKEN_SECRET" ]; then
+    log "Uploading report to BookStack..."
+    BOOKSTACK_URL="$BOOKSTACK_URL" \
+    BOOKSTACK_TOKEN_ID="$BOOKSTACK_TOKEN_ID" \
+    BOOKSTACK_TOKEN_SECRET="$BOOKSTACK_TOKEN_SECRET" \
+        python3 "${SCRIPT_DIR}/upload-zap-report.py" \
+            "$REPORT_FILE" \
+            "http://${ZAP_SERVICE}" \
+            "$RUN_ID" \
+            "$TARGET_CAPI"
+    log "ZAP phases complete — report uploaded to BookStack"
+    rm -f "$REPORT_FILE"
+else
+    log "BookStack creds missing — keeping report at $REPORT_FILE for manual review."
+fi
 
 # ── Phase 7: Schemathesis API fuzzing ───────────────────────
 # Runs LAST and intentionally outside the ZAP critical path.
@@ -222,7 +238,7 @@ if command -v schemathesis >/dev/null 2>&1; then
         log "Fuzz user auth failed (HTTP $HTTP) — skipping Schemathesis."
         log "  Likely the fuzz user's password has drifted from"
         log "  FuzzPass123!. Reset via:"
-        log "    kubectl exec -n gmr-dast deploy/postgresql -- psql -U postgres \\"
+        log "    kubectl exec -n fontem-dast deploy/postgresql -- psql -U postgres \\"
         log "      -d gmr_app -c \"UPDATE users SET password_hash='<bcrypt>',"
         log "      failed_login_attempts=0, locked_until=NULL"
         log "      WHERE email='fuzz@gmr.test';\""
