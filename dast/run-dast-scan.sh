@@ -35,7 +35,7 @@ BOOKSTACK_TOKEN_SECRET=$(kubectl -n "$NAMESPACE" get secret bookstack-api -o jso
 BOOKSTACK_AUTH="Token ${BOOKSTACK_TOKEN_ID}:${BOOKSTACK_TOKEN_SECRET}"
 
 SMOKE_REPO="/config/repos/fontem-smoke-tests"
-WEB_REPO="/config/repos/gmr-web"
+WEB_REPO="/config/repos/fontem-web"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 
