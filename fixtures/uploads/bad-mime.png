@@ -1,0 +1,2 @@
+This is not a PNG file. The bytes start with plain ASCII text.
+The file extension is a lie. The pipeline must reject this.
