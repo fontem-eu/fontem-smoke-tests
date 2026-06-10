@@ -112,13 +112,14 @@ curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
     >/dev/null 2>&1 || true
 curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
     -H "Content-Type: application/json" \
-    -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!","name":"Schemathesis Fuzz"}' \
+    -d '{"email":"fuzz@fontem.eu","password":"FuzzPass123!","name":"Schemathesis Fuzz"}' \
     >/dev/null 2>&1 || true
 
 # ── Phase 3: Passive scan — e2e + smoke tests through ZAP ──
 log "Running e2e tests through ZAP proxy (passive scan)..."
 cd "$WEB_REPO"
 BASE_URL="https://fontem.dast.void42.internal" \
+    PLAYWRIGHT_PROXY="http://${ZAP_SERVICE}" \
     npx playwright test --project=chromium \
     --config=playwright.config.js \
     --grep-invert "ASSIST" 2>&1 | tail -5 || true
@@ -126,6 +127,7 @@ BASE_URL="https://fontem.dast.void42.internal" \
 log "Running smoke tests through ZAP proxy (passive scan)..."
 cd "$SMOKE_REPO"
 BASE_URL="https://fontem.dast.void42.internal" \
+    PLAYWRIGHT_PROXY="http://${ZAP_SERVICE}" \
     npx playwright test --project=chromium \
     --grep-invert "ASSIST" 2>&1 | tail -5 || true
 
@@ -211,7 +213,7 @@ if command -v schemathesis >/dev/null 2>&1; then
     HTTP=$(curl -sk -o "$LOGIN_BODY" -w "%{http_code}" \
         -X POST "${TARGET_CAPI}/auth/login" \
         -H "Content-Type: application/json" \
-        -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!"}')
+        -d '{"email":"fuzz@fontem.eu","password":"FuzzPass123!"}')
     FUZZ_JWT=""
     if [ "$HTTP" = "200" ]; then
         FUZZ_JWT=$(python3 -c "import json,sys; print(json.load(open('$LOGIN_BODY')).get('access_token',''))" 2>/dev/null || true)
@@ -241,7 +243,7 @@ if command -v schemathesis >/dev/null 2>&1; then
         log "    kubectl exec -n fontem-dast deploy/postgresql -- psql -U postgres \\"
         log "      -d gmr_app -c \"UPDATE users SET password_hash='<bcrypt>',"
         log "      failed_login_attempts=0, locked_until=NULL"
-        log "      WHERE email='fuzz@gmr.test';\""
+        log "      WHERE email='fuzz@fontem.eu';\""
     fi
 else
     log "Schemathesis install failed; skipping (pip --break-system-packages not allowed?)"

@@ -53,6 +53,17 @@ spec:
       activeDeadlineSeconds: 7200
       backoffLimit: 0
       template:
+        metadata:
+          annotations:
+            # ZAP active-scan fires thousands of outbound requests per
+            # second. The linkerd-proxy sidecar's default memory limit
+            # (~64 MiB) gets OOM-killed under that load, after which all
+            # outbound goes to dev/null and the scan stalls forever.
+            # The DAST namespace doesn't need service mesh — every call
+            # is either to the in-cluster ZAP API (short lived, control
+            # plane) or out through the ingress (already terminated by
+            # nginx). Skip injection.
+            linkerd.io/inject: disabled
         spec:
           restartPolicy: Never
           containers:
@@ -74,9 +85,18 @@ spec:
               ports:
                 - name: http
                   containerPort: 8080
+              env:
+                # JVM auto-sizes heap to 25% of container memory by
+                # default — that's only 4 GiB of the 16 GiB pod limit,
+                # not enough for active-scan + retire.js + Suspicious
+                # Comments running concurrently on our ~2 MiB prerendered
+                # bundle. Set heap explicitly to 12 GiB so ZAP has room
+                # and leaves ~4 GiB for the JVM's own overhead.
+                - name: JAVA_TOOL_OPTIONS
+                  value: "-Xmx12g -XX:MaxRAMPercentage=75"
               resources:
-                requests: { cpu: 250m, memory: 1Gi }
-                limits: { cpu: 2, memory: 4Gi }
+                requests: { cpu: 500m, memory: 4Gi }
+                limits: { cpu: 4, memory: 16Gi }
               readinessProbe:
                 httpGet:
                   path: /JSON/core/view/version/
