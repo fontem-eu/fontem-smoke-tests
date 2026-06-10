@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200"><script>alert("xss-via-script-tag")</script><rect width="200" height="200" fill="red" onclick="alert('xss-via-onclick')"/><a href="javascript:alert('xss-via-href')"><circle cx="100" cy="100" r="40" fill="white"/></a><a xlink:href="javascript:alert('xss-via-xlink')"><circle cx="100" cy="100" r="20" fill="blue"/></a><foreignObject><body xmlns="http://www.w3.org/1999/xhtml"><script>alert('xss-via-foreignobject')</script></body></foreignObject></svg>
