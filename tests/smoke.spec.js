@@ -430,16 +430,23 @@ test.describe.serial('Production Smoke Tests', () => {
     const tableLink = page.locator('[data-testid^="contract-ted-link-"]').first()
     await tableLink.waitFor({ state: 'visible', timeout: 20_000 })
 
-    // The link must:
-    //   - go through the fontem-api redirect endpoint, which
-    //     translates the eForms UUID we store as ted_notice_id into
-    //     TED's publication-number. Hitting ted.europa.eu directly
-    //     with the UUID returns HTTP 202 + empty body (blank page)
-    //     because TED's portal keys notices by publication-number.
-    //   - open in a new tab (target=_blank, rel=noopener)
-    //   - be rendered for every row, not just rows with explicit ted_url
+    // The link must take one of the two valid shapes the
+    // tedNoticeUrl helper now produces (see fontem-web
+    // src/utils/tedUrl.js — 2026-06 added the direct path):
+    //
+    //   1. https://ted.europa.eu/en/notice/-/detail/<pub-num> — when
+    //      the ETL captured ted_publication_number (the fast path,
+    //      no redirect latency, cacheable).
+    //   2. /api/contracts/<notice-id>/ted-link — fallback for older
+    //      rows where only the UUID is stored; the backend 302s to
+    //      the canonical URL.
+    //
+    // The link must also open in a new tab (target=_blank,
+    // rel=noopener) and be rendered for every row.
     const href = await tableLink.getAttribute('href')
-    expect(href).toMatch(/^\/api\/contracts\/[^/]+\/ted-link$/)
+    expect(href).toMatch(
+      /^(https:\/\/ted\.europa\.eu\/en\/notice\/-\/detail\/[^/]+|\/api\/contracts\/[^/]+\/ted-link)$/,
+    )
     expect(await tableLink.getAttribute('target')).toBe('_blank')
     expect(await tableLink.getAttribute('rel')).toContain('noopener')
 
@@ -827,7 +834,10 @@ test.describe.serial('Production Smoke Tests', () => {
 
     // Bundle-text check: the tooltip wording change shipped.
     const html = await page.content()
-    const m = html.match(/\/assets\/index-[A-Za-z0-9]+\.js/)
+    // Vite 5+ uses base64url-safe chars in bundle hashes (the
+    // underscore in `index-D0sj493_.js` for example); broaden the
+    // class beyond [A-Za-z0-9] to match.
+    const m = html.match(/\/assets\/index-[A-Za-z0-9_-]+\.js/)
     expect(m).not.toBeNull()
     const bundleUrl = new URL(m[0], page.url()).toString()
     const bundle = await page.evaluate(async (u) => {
@@ -1149,10 +1159,10 @@ test.describe.serial('Production Smoke Tests', () => {
         0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
         0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
         0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
-        0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0x00,
-        0x00, 0x00, 0x05, 0x00, 0x01, 0x5E, 0xF3, 0x2A,
-        0x3A, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
-        0x44, 0xAE, 0x42, 0x60, 0x82,
+        0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0x60,
+        0x00, 0x00, 0x00, 0x05, 0x00, 0x01, 0xA5, 0xF6,
+        0x45, 0x40, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+        0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
       ])
       const form = new FormData()
       form.append('file', new Blob([png], { type: 'image/png' }), 'tiny.png')
@@ -1477,7 +1487,12 @@ test.describe.serial('Production Smoke Tests', () => {
 
     let anonCtx
     try {
-      anonCtx = await browser.newContext()
+      // playwright.config.js sets a global `storageState: ./auth.json`
+      // so `browser.newContext()` inherits the authed cookies +
+      // localStorage by default — that's not anon. Override with an
+      // empty state so this context starts with no token and the
+      // flower button hits the !hasToken branch.
+      anonCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } })
       const anonPage = await anonCtx.newPage()
       await anonPage.goto(`/stories/${anonStoryId}?cb=${Date.now()}`)
       const btn = anonPage.locator('[data-testid="flower-button"]')
@@ -2618,11 +2633,17 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('STORY-UPLOAD-SEC-7: JPEG padded past the 20 MB byte cap is rejected', async ({ page }) => {
+    // Layered defence: nginx's `client_max_body_size` on the ingress
+    // rejects oversized bodies with 413 BEFORE they reach the API
+    // process; the file_security pipeline's MAX_RASTER_BYTES check
+    // is the backup if nginx ever lets something through. Either
+    // rejection is a valid pass — we just need the bytes not to
+    // land in MinIO.
     const seed = await _seedUploadStory(page, 'too-big')
     try {
       const resp = await _uploadFixture(page, seed, 'too-big.jpg', 'image/jpeg')
-      expect(resp.status()).toBe(400)
-      expect(await resp.text()).toMatch(/too large/i)
+      expect([400, 413], `expected oversize rejection, got ${resp.status()}`)
+        .toContain(resp.status())
     } finally {
       await _cleanupStory(page, seed)
     }

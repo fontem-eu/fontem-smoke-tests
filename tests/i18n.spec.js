@@ -37,8 +37,12 @@ const LOCALES = [
   },
   {
     code: 'pt',
-    titleContains: 'Histórias de dados públicas',
-    feedSubContains: 'Histórias de dados públicas',
+    // The PT translation was tightened on 2026-06: "de" → "com"
+    // ("histórias de dados" → "histórias com dados"). Same phrase
+    // in meta.title.home and the feed-sub copy, so both fields
+    // move together.
+    titleContains: 'Histórias com dados públicas',
+    feedSubContains: 'Histórias com dados públicas',
     pluralZero: 'sem contratos',
     pluralOne: '1 contrato',
     pluralMany: '5 contratos',
