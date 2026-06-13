@@ -1887,8 +1887,14 @@ test.describe.serial('Production Smoke Tests', () => {
       }
     })()
 
+    // 120s ceiling for the first token to render — Mistral's slowest
+    // path on staging is a chained tool-using turn (investigate_entity →
+    // get_contracts → analyse) on top of an already-long conversation
+    // context, which we've measured at 60-100s for first token. 30s and
+    // 60s both got hit and triggered the suite-wide retry; 120s is the
+    // matching ceiling for the streaming-done wait below.
     await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`)
-      .waitFor({ state: 'visible', timeout: 30_000 })
+      .waitFor({ state: 'visible', timeout: 120_000 })
     const statusEl = page.locator('[data-testid="assist-status"]')
     if (await statusEl.isVisible().catch(() => false)) {
       await statusEl.waitFor({ state: 'hidden', timeout: 120_000 })
@@ -1916,8 +1922,11 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.fill('[data-testid="assist-input"]', message)
     await page.click('[data-testid="assist-send"]')
 
-    // Wait for a NEW assistant message to appear (count increases)
-    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`).waitFor({ state: 'visible', timeout: 30_000 })
+    // Wait for a NEW assistant message to appear (count increases).
+    // 120s ceiling matches sendAssistMessageAndCaptureStatuses — see
+    // its comment for the Mistral first-token latency we observed on
+    // chained tool-using turns.
+    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`).waitFor({ state: 'visible', timeout: 120_000 })
 
     // Wait for streaming to finish — the status indicator appears during streaming
     // and disappears when done. If it's already gone, streaming was fast.
@@ -2131,9 +2140,17 @@ test.describe.serial('Production Smoke Tests', () => {
     // with a propose_edit tool call; with bypass on, the panel applies
     // it automatically — no Apply button is rendered, and the
     // "Applied automatically" badge shows instead.
+    //
+    // Name the actual tool (propose_edit / action=update_title) — the
+    // assistant's system prompt refuses anything that asks for a tool
+    // it doesn't expose ("set_title" was a stale name that survived a
+    // mcp-server rename; the assistant pushes back instead of
+    // hallucinating the call, which is the correct behaviour we just
+    // can't smoke-test for here).
+    const bypassTitle = `Bypass smoke ${RUN_ID.slice(0, 8)}`
     await sendAssistMessage(page,
-      'Use the set_title tool to set the report title to "Bypass mode smoke test". ' +
-      'Reply with just "ok" after calling the tool.')
+      `Use the propose_edit tool with action="update_title" to set the report ` +
+      `title to "${bypassTitle}". Reply with just "ok" after calling the tool.`)
 
     // The Applied-automatically badge proves the bypass path ran.
     await expect(
@@ -2287,9 +2304,17 @@ test.describe.serial('Production Smoke Tests', () => {
       responseText,
       `Coverage response did not include a year: "${responseText.slice(0, 300)}…"`,
     ).toMatch(/20\d{2}/)
-    // And it should be meaningfully long (≥ 50 chars) — short answers
-    // like "I don't know" or "various" have been the failure mode.
-    expect(responseText.length).toBeGreaterThan(50)
+    // Two distinct year matches OR a long explanatory answer — guards
+    // against the "I don't know" / "various" hand-wave failure mode.
+    // A terse but structured "Earliest: 2026-03-03 Latest: 2026-06-13"
+    // (49 chars on staging) is exactly the answer we want and shouldn't
+    // be rejected for being short.
+    const yearMatches = responseText.match(/20\d{2}/g) ?? []
+    const looksConcrete = yearMatches.length >= 2 || responseText.length > 50
+    expect(
+      looksConcrete,
+      `Coverage response looks hand-wavy: "${responseText.slice(0, 300)}…"`,
+    ).toBe(true)
   })
 
   // ── Full-flow gate: assistant generates → apply → save → reload ──
