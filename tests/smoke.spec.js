@@ -63,10 +63,34 @@ async function demoMark(page, label, ms = 1500) {
  * This is the shape that keeps /auth/login rate-limit pressure at 0-3
  * hits per suite run instead of 1 hit per test.
  */
+/**
+ * Mint a fresh 15-min access JWT by calling /auth/refresh with the
+ * httpOnly cookie the page context carries (seeded by global-setup).
+ * Replaces the pre-session-migration pattern of reading
+ * ``localStorage.getItem('gmr-token')`` directly — the SPA now keeps
+ * the access token in memory only.
+ */
+async function freshAccessToken(page) {
+  return await page.evaluate(async () => {
+    const r = await fetch('/capi/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (!r.ok) throw new Error(`/auth/refresh failed: ${r.status}`)
+    const data = await r.json()
+    return data.access_token
+  })
+}
+
 async function uiLogin(page) {
   await page.goto('/')
-  const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
-  if (token) return
+  // Try to mint a fresh access token via the cookie. If the cookie
+  // round-tripped from global-setup, this succeeds and the SPA's own
+  // main.js refresh() will also have populated the in-memory store.
+  try {
+    await freshAccessToken(page)
+    return
+  } catch { /* fall through to UI login */ }
   // Fallback: storageState missing or expired — do a real UI login.
   await page.goto('/login')
   await page.fill('[data-testid="login-email"]', TEST_EMAIL)
@@ -128,7 +152,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // testing env where nothing is tagged yet.
     await uiLogin(page)
     const seedTag = `smoke-${RUN_ID.slice(-8)}`
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     const seededId = await page.evaluate(async ({ tag, tok }) => {
       // POST /data-stories accepts only title/abstract/parent_id — the
       // visibility lives on the PUT update endpoint. So we create
@@ -1140,7 +1164,7 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
     await demoMark(page, 'STORY-IMAGE-UPLOAD — POST a 1×1 PNG to /upload')
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     const result = await page.evaluate(async ({ id, tok }) => {
       // Smallest valid PNG bytes — 1×1 transparent pixel.
       const png = Uint8Array.from([
@@ -1316,7 +1340,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // Self-seed a fresh public_open story for this test so the
     // assertion is independent of the shared chain AND safe to retry.
     await uiLogin(page)
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     if (!token) test.skip()
     const flowerStoryId = await page.evaluate(async ({ runId, tok }) => {
       const r = await fetch('/capi/data-stories', {
@@ -1386,7 +1410,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // load-bearing policy of the feature — if the cap regresses, no
     // other test catches it.
     await uiLogin(page)
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     if (!token) test.skip()
     const capStoryId = await page.evaluate(async ({ runId, tok }) => {
       const r = await fetch('/capi/data-stories', {
@@ -1456,7 +1480,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // render disabled (not vanish) so anon visitors can see the
     // social signal and a sign-in hint.
     await uiLogin(page)
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     if (!token) test.skip()
     const anonStoryId = await page.evaluate(async ({ runId, tok }) => {
       const r = await fetch('/capi/data-stories', {
@@ -2395,7 +2419,7 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="save-story"]')).toBeEnabled({ timeout: 10_000 })
 
     // Cleanup — don't accumulate round-trip reports across runs.
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     await page.request.delete(`/capi/stories/${localReportId}`, {
       headers: { Authorization: `Bearer ${token}` },
     }).catch(() => {})
@@ -2525,7 +2549,7 @@ test.describe.serial('Production Smoke Tests', () => {
 
   async function _seedUploadStory(page, suffix) {
     await uiLogin(page)
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     if (!token) test.skip()
     const id = await page.evaluate(async ({ runId, tok, s }) => {
       const r = await fetch('/capi/data-stories', {
@@ -2690,7 +2714,7 @@ test.describe.serial('Production Smoke Tests', () => {
     if (!storyId) test.skip()
     await uiLogin(page)
     // Navigate to the report and delete it via the API (no delete UI button in view)
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     const resp = await page.request.delete(`/capi/stories/${storyId}`, {
       headers: { Authorization: `Bearer ${token}` },
     })

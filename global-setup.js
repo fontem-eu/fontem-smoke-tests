@@ -50,7 +50,12 @@ function postJson(url, body) {
         res.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf-8')
           if (res.statusCode >= 200 && res.statusCode < 300) {
-            try { resolve(JSON.parse(text)) } catch (e) { reject(e) }
+            try {
+              resolve({
+                body: JSON.parse(text),
+                setCookie: res.headers['set-cookie'] || [],
+              })
+            } catch (e) { reject(e) }
           } else {
             reject(new Error(`HTTP ${res.statusCode}: ${text}`))
           }
@@ -63,21 +68,63 @@ function postJson(url, body) {
   })
 }
 
+/**
+ * Convert the server's Set-Cookie header into Playwright storageState
+ * cookies. The session migration (2026-06-13) puts the refresh token in
+ * an httpOnly cookie that has to round-trip in every test context, so
+ * we capture it here once and let every test inherit it.
+ */
+function parseSetCookies(setCookieHeaders, hostname) {
+  const cookies = []
+  for (const raw of setCookieHeaders) {
+    const parts = raw.split(';').map((s) => s.trim())
+    const [name, ...valueParts] = parts[0].split('=')
+    const value = valueParts.join('=')
+    const attrs = Object.fromEntries(parts.slice(1).map((p) => {
+      const [k, ...vs] = p.split('=')
+      return [k.toLowerCase(), vs.join('=') || true]
+    }))
+    cookies.push({
+      name,
+      value,
+      domain: hostname,
+      path: attrs.path || '/',
+      expires: attrs['max-age']
+        ? Math.floor(Date.now() / 1000) + parseInt(attrs['max-age'], 10)
+        : -1,
+      httpOnly: 'httponly' in attrs,
+      secure: 'secure' in attrs,
+      sameSite: attrs.samesite
+        ? attrs.samesite[0].toUpperCase() + attrs.samesite.slice(1).toLowerCase()
+        : 'Lax',
+    })
+  }
+  return cookies
+}
+
 export default async function globalSetup() {
   // One API login, full stop.
-  const data = await postJson(`${ORIGIN}/capi/auth/login`, {
+  const { body: data, setCookie } = await postJson(`${ORIGIN}/capi/auth/login`, {
     email: EMAIL,
     password: PASSWORD,
   })
 
+  const hostname = new URL(ORIGIN).hostname
   const state = {
-    cookies: [],
+    cookies: parseSetCookies(setCookie, hostname),
     origins: [
       {
         origin: ORIGIN,
         localStorage: [
+          // Legacy ``gmr-token`` retained so any pre-migration test
+          // helper that still reads localStorage doesn't bomb — the
+          // SPA itself no longer reads it (sessions are in-memory +
+          // cookie after 2026-06-13). New tests should call
+          // ``freshAccessToken(page)`` instead.
           { name: 'gmr-token', value: data.access_token },
           { name: 'gmr-user', value: JSON.stringify(data.user) },
+          // The post-migration user-cache key the new SPA reads.
+          { name: 'fontem-user', value: JSON.stringify(data.user) },
           // Cookie-consent banner is dismissed so it doesn't overlap UI
           // elements during tests.
           { name: 'gmr-cookie-consent', value: 'declined' },
@@ -88,5 +135,8 @@ export default async function globalSetup() {
 
   await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2))
   // eslint-disable-next-line no-console
-  console.log(`[global-setup] logged in as ${data.user.email}, state → ${STATE_PATH}`)
+  console.log(
+    `[global-setup] logged in as ${data.user.email}, ` +
+    `${state.cookies.length} cookie(s) captured, state → ${STATE_PATH}`,
+  )
 }
