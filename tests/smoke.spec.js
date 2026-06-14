@@ -454,16 +454,24 @@ test.describe.serial('Production Smoke Tests', () => {
     const tableLink = page.locator('[data-testid^="contract-ted-link-"]').first()
     await tableLink.waitFor({ state: 'visible', timeout: 20_000 })
 
-    // The link must:
-    //   - go through the fontem-api redirect endpoint, which
-    //     translates the eForms UUID we store as ted_notice_id into
-    //     TED's publication-number. Hitting ted.europa.eu directly
-    //     with the UUID returns HTTP 202 + empty body (blank page)
-    //     because TED's portal keys notices by publication-number.
+    // The link must point at a usable TED destination. Two valid
+    // shapes (see fontem-web src/utils/tedUrl.js), in priority order:
+    //   1. Direct deep link to TED when the contract row carries a
+    //      ted_publication_number (the ETL captures it via TED's v3
+    //      search): https://ted.europa.eu/en/notice/-/detail/<pub-num>.
+    //      Preferred — no backend round-trip, fully cacheable.
+    //   2. The fontem-api redirector /api/contracts/<id>/ted-link for
+    //      rows whose pub-num wasn't yet assigned at ingest; the
+    //      backend translates UUID → pub-num and 302s. Fallback.
+    // Either is correct; pin "lands somewhere TED-resolvable", not one
+    // specific path. (Was redirector-only before the ETL populated
+    // pub-nums — direct links are now the common case.)
     //   - open in a new tab (target=_blank, rel=noopener)
     //   - be rendered for every row, not just rows with explicit ted_url
     const href = await tableLink.getAttribute('href')
-    expect(href).toMatch(/^\/api\/contracts\/[^/]+\/ted-link$/)
+    expect(href).toMatch(
+      /^(https:\/\/ted\.europa\.eu\/en\/notice\/-\/detail\/.+|\/api\/contracts\/[^/]+\/ted-link)$/,
+    )
     expect(await tableLink.getAttribute('target')).toBe('_blank')
     expect(await tableLink.getAttribute('rel')).toContain('noopener')
 
