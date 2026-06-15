@@ -27,6 +27,13 @@ export default defineConfig({
     ignoreHTTPSErrors: /\.void42\.internal(\/|$|:)/.test(BASE_URL),
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // When PLAYWRIGHT_PROXY is set (the DAST runner pointing at the ZAP
+    // container), funnel every browser request through it so ZAP gets to
+    // passively scan the same traffic the smoke suite generates. Unset on
+    // prod / dev runs — direct connections.
+    ...(process.env.PLAYWRIGHT_PROXY
+      ? { proxy: { server: process.env.PLAYWRIGHT_PROXY } }
+      : {}),
   },
   projects: [
     {
