@@ -33,7 +33,7 @@ export default defineConfig({
       name: 'chromium',
       // Desktop suite stays on tests/{smoke,auth-helper,consolidator}.spec.js
       // — the mobile spec is opted out via the matcher below.
-      testMatch: /(smoke|auth-helper|consolidator)\.spec\.js$/,
+      testMatch: /(smoke|auth-helper|consolidator|data-quality)\.spec\.js$/,
       use: { ...devices['Desktop Chrome'] },
     },
     {
