@@ -267,6 +267,9 @@ test.describe.serial('Mobile Smoke Suite', () => {
   test('MOBILE-CLEANUP: delete the test story', async ({ page }) => {
     if (!storyId) test.skip()
     await page.goto('/my-stories')
+    // The cleanup itself is best-effort below; assert at least that the
+    // navigation landed so the test carries a real expectation (S2699).
+    await expect(page).toHaveURL(/my-stories/)
     // Find the story card by title and trigger its delete affordance.
     // The mobile layout still surfaces the card; the delete control is
     // accessed via the per-card menu / button.
