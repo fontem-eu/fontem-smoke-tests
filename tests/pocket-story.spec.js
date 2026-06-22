@@ -45,8 +45,8 @@ test.describe('Pocketable charts → data story', () => {
     async function saveChart(idx, name) {
       const chart = charts.nth(idx)
       await chart.scrollIntoViewIfNeeded()
-      await chart.hover() // the save button is opacity:0 until hover
-      await chart.locator('[data-testid="pocket-save-btn"]').click()
+      await chart.locator('[data-testid="chart-menu-btn"]').click() // open the ⋮ actions menu
+      await chart.locator('[data-testid="pocket-save-btn"]').click() // "Save to pocket"
       const input = page.locator('[data-testid="pocket-name-input"]')
       await input.waitFor({ state: 'visible', timeout: 10_000 })
       await input.fill(name)
@@ -106,5 +106,26 @@ test.describe('Pocketable charts → data story', () => {
       page.locator('[data-testid="widget-chart-snapshot"]'),
       'saved chart_snapshot widgets re-render after a reload (round-trip persisted)',
     ).toHaveCount(2, { timeout: 20_000 })
+  })
+
+  test('POCKET-DOWNLOAD: the chart actions menu downloads the chart as an image', async ({ page }) => {
+    await page.goto('/data-quality/contracts')
+    const charts = page.locator('[data-testid="pocketable-chart"]')
+    let present = true
+    try {
+      await charts.first().waitFor({ state: 'visible', timeout: 15_000 })
+    } catch {
+      present = false
+    }
+    test.skip(!present, 'PocketableChart not deployed in this environment yet')
+
+    const chart = charts.first()
+    await chart.locator('[data-testid="chart-menu-btn"]').click()
+    await expect(chart.locator('[data-testid="chart-download-btn"]')).toBeVisible()
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      chart.locator('[data-testid="chart-download-btn"]').click(),
+    ])
+    expect(download.suggestedFilename()).toMatch(/\.(svg|png)$/)
   })
 })
