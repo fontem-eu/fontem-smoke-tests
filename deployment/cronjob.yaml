@@ -10,6 +10,10 @@ metadata:
     environment: prod
 spec:
   schedule: "0 */8 * * *"
+  # Suspended 2026-06-22: the smoke suite is run on-demand against staging,
+  # not on a schedule against prod. The prod-target runs were perpetually
+  # failing (data-dependent tests vs the prod dataset) and added only noise.
+  suspend: true
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 5
   failedJobsHistoryLimit: 5
