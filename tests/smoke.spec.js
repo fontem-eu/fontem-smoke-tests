@@ -667,8 +667,9 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(mapDiv).toBeVisible()
     await expect(mapDiv.locator('canvas')).toBeVisible({ timeout: 15_000 })
 
-    // PocketButton must be present (widget interface)
-    await expect(page.locator('[data-testid="pocket-save-btn"]')).toBeVisible()
+    // The shared viz actions menu must be present (widget interface).
+    // Save now lives behind the ⋮ menu, so assert the menu button itself.
+    await expect(page.locator('[data-testid="pocket-menu-btn"]')).toBeVisible()
 
     // ── Verify the API returned highlighted regions ───────────────────────────
     // This is the key assertion: the backend must have returned ≥1 NUTS regions

@@ -45,7 +45,7 @@ test.describe('Pocketable charts → data story', () => {
     async function saveChart(idx, name) {
       const chart = charts.nth(idx)
       await chart.scrollIntoViewIfNeeded()
-      await chart.locator('[data-testid="chart-menu-btn"]').click() // open the ⋮ actions menu
+      await chart.locator('[data-testid="pocket-menu-btn"]').click() // open the ⋮ actions menu
       await chart.locator('[data-testid="pocket-save-btn"]').click() // "Save to pocket"
       const input = page.locator('[data-testid="pocket-name-input"]')
       await input.waitFor({ state: 'visible', timeout: 10_000 })
@@ -120,11 +120,11 @@ test.describe('Pocketable charts → data story', () => {
     test.skip(!present, 'PocketableChart not deployed in this environment yet')
 
     const chart = charts.first()
-    await chart.locator('[data-testid="chart-menu-btn"]').click()
-    await expect(chart.locator('[data-testid="chart-download-btn"]')).toBeVisible()
+    await chart.locator('[data-testid="pocket-menu-btn"]').click()
+    await expect(chart.locator('[data-testid="pocket-download-btn"]')).toBeVisible()
     const [download] = await Promise.all([
       page.waitForEvent('download'),
-      chart.locator('[data-testid="chart-download-btn"]').click(),
+      chart.locator('[data-testid="pocket-download-btn"]').click(),
     ])
     expect(download.suggestedFilename()).toMatch(/\.(svg|png)$/)
   })
