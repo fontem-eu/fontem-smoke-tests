@@ -57,6 +57,7 @@ async function clearCookieConsent(page) {
 // The assistant only mounts inside the report editor route.
 async function createStory(page) {
   await page.goto('/my-stories')
+  await page.click('[data-testid="create-btn"]')  // M3: Create -> Story
   await page.click('[data-testid="new-story-btn"]')
   await page.waitForURL(/\/stories\/.*\/edit/, { timeout: 30_000 })
   const id = page.url().match(/\/stories\/([^/]+)\/edit/)?.[1]

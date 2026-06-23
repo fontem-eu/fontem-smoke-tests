@@ -949,6 +949,7 @@ test.describe.serial('Production Smoke Tests', () => {
   test('STORY-09: Create story via UI', async ({ page }) => {
     await uiLogin(page)
     await page.goto('/my-stories')
+    await page.click('[data-testid="create-btn"]')  // M3: Create -> Story
     await page.click('[data-testid="new-story-btn"]')
     // Should navigate to /stories/<id>/edit. Generous timeout because
     // the create→redirect path is sometimes cold (first DB write of
@@ -2400,6 +2401,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // Use a fresh report so this test doesn't fight ASSIST-20's
     // editor state (and so it can run in isolation in dev too).
     await page.goto('/my-stories')
+    await page.click('[data-testid="create-btn"]')  // M3: Create -> Story
     await page.click('[data-testid="new-story-btn"]')
     await page.waitForURL(/\/stories\/.*\/edit/, { timeout: 15_000 })
     const localReportId = page.url().match(/\/stories\/([^/]+)\/edit/)?.[1]

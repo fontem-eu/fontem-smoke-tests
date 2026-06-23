@@ -69,6 +69,7 @@ test.describe('Pocketable charts → data story', () => {
 
     // ── 3. Create a fresh data story ──
     await page.goto('/my-stories')
+    await page.click('[data-testid="create-btn"]')  // M3: Create -> Story
     await page.click('[data-testid="new-story-btn"]')
     await page.waitForURL(/\/stories\/.*\/edit/, { timeout: 30_000 })
     const storyId = page.url().match(/\/stories\/([^/]+)\/edit/)?.[1]
