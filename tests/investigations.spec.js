@@ -13,6 +13,23 @@ import { test, expect } from './baseTest.js'
 
 const RUN = String(Date.now())
 
+/**
+ * Register the throwaway invitee. The /auth/register endpoint is per-IP rate
+ * limited and the suite shares that budget, so tolerate 409 (already created by
+ * a prior attempt) and retry 429 with a backoff rather than flaking.
+ */
+async function registerInvitee(request, email) {
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const reg = await request.post('/capi/auth/register', {
+      data: { email, password: 'TestPass123!', name: 'Smoke Invitee' },
+    })
+    if (reg.ok() || reg.status() === 409) return
+    if (reg.status() !== 429) throw new Error(`register invitee: HTTP ${reg.status()}`)
+    await new Promise((resolve) => { setTimeout(resolve, 3000 * attempt) })
+  }
+  throw new Error('register invitee: still rate-limited (429) after retries')
+}
+
 test.describe('Investigations', () => {
   test.setTimeout(150_000)
 
@@ -39,10 +56,7 @@ test.describe('Investigations', () => {
 
     // ── register a throwaway invitee (independent request ctx) ──
     const email = `inv-${RUN}@example.com`
-    const reg = await request.post('/capi/auth/register', {
-      data: { email, password: 'TestPass123!', name: 'Smoke Invitee' },
-    })
-    expect(reg.ok(), `register invitee: HTTP ${reg.status()}`).toBeTruthy()
+    await registerInvitee(request, email)
 
     // ── invite by email with a capability ──
     await page.fill('[data-testid="invite-email-input"]', email)
@@ -53,11 +67,25 @@ test.describe('Investigations', () => {
     await expect(row).toContainText('Contributor')
 
     // ── promote to owner ──
+    // Gate on the member's role CHIP, not generic "Owner" text: the is_owner
+    // capability checkbox is labelled "Owner" and is always in the row, so
+    // toContainText('Owner') matched it and passed BEFORE the promotion
+    // committed — the next mutation then raced the server (the flake). The role
+    // chip only reads "Owner" after the PUT + members refetch land.
     await row.locator('input[data-testid^="cap-is_owner-"]').check()
-    await expect(row).toContainText('Owner', { timeout: 10_000 })
+    await expect(row.locator('[data-testid^="member-role-"]')).toHaveText('Owner', { timeout: 10_000 })
 
     // ── owner invariant: changing another owner is rejected (409) inline ──
+    // Capture the member PUT so we assert the server's verdict directly rather
+    // than only the eventual banner (which previously raced an uncommitted
+    // promotion). is_owner is committed above, so this is deterministic now.
+    const rejected = page.waitForResponse(
+      (r) => /\/capi\/investigations\/[^/]+\/members\//.test(r.url())
+        && r.request().method() === 'PUT',
+      { timeout: 15_000 },
+    )
     await row.locator('input[data-testid^="cap-can_add_viz-"]').click()
+    expect((await rejected).status(), 'changing another owner must 409').toBe(409)
     await expect(page.locator('[data-testid="investigation-detail-error"]')).toBeVisible({ timeout: 10_000 })
   })
 })
