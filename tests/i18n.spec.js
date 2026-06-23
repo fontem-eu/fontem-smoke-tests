@@ -37,8 +37,8 @@ const LOCALES = [
   },
   {
     code: 'pt',
-    titleContains: 'Histórias de dados públicas',
-    feedSubContains: 'Histórias de dados públicas',
+    titleContains: 'Histórias com dados públicas',
+    feedSubContains: 'Histórias com dados públicas',
     pluralZero: 'sem contratos',
     pluralOne: '1 contrato',
     pluralMany: '5 contratos',

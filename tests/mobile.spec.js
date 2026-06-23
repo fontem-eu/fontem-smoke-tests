@@ -21,7 +21,15 @@
  * Demo-mode banners are gated on `SMOKE_DEMO=1` exactly like the
  * desktop suite — keeps CI fast, makes the recording followable.
  */
-import { test, expect } from '@playwright/test'
+// Auth via the shared base fixture (injects the bootstrap access token), NOT
+// raw @playwright/test. The mobile suite was the lone spec importing the raw
+// test object, so its pages never got the token and fell back to the shared
+// `fontem_refresh` cookie. That cookie rotates on the first /auth/refresh, so
+// in a serial run MOBILE-1's page-load refresh consumed it and the first
+// authenticated test (MOBILE-5: createStory) hit a 401 storm. Routing through
+// baseTest mirrors pocket-story / investigations / smoke and keeps the session
+// stable across the whole serial run.
+import { test, expect } from './baseTest.js'
 
 const STORY_TITLE = `Mobile Smoke ${Date.now()}`
 
