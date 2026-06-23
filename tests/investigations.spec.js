@@ -58,33 +58,29 @@ test.describe('Investigations', () => {
     const email = `inv-${RUN}@example.com`
     await registerInvitee(request, email)
 
-    // ── invite by email with a capability ──
+    // ── invite by email with a role ──
     await page.fill('[data-testid="invite-email-input"]', email)
-    await page.check('[data-testid="invite-write"]')
+    await page.selectOption('[data-testid="invite-role"]', 'contributor')
     await page.click('[data-testid="invite-add-btn"]')
     const row = page.locator('[data-testid="investigation-members"] li', { hasText: email })
     await expect(row).toBeVisible({ timeout: 10_000 })
-    await expect(row).toContainText('Contributor')
+    // The role chip (a span) — not the role <select>, which also contains the
+    // word "Contributor" as an option — confirms the committed role.
+    await expect(row.locator('.invd-member-role')).toHaveText('Contributor', { timeout: 10_000 })
 
-    // ── promote to owner ──
-    // Gate on the member's role CHIP, not generic "Owner" text: the is_owner
-    // capability checkbox is labelled "Owner" and is always in the row, so
-    // toContainText('Owner') matched it and passed BEFORE the promotion
-    // committed — the next mutation then raced the server (the flake). The role
-    // chip only reads "Owner" after the PUT + members refetch land.
-    await row.locator('input[data-testid^="cap-is_owner-"]').check()
-    await expect(row.locator('[data-testid^="member-role-"]')).toHaveText('Owner', { timeout: 10_000 })
+    // ── promote to owner via the role select ──
+    await row.locator('[data-testid^="member-role-select-"]').selectOption('owner')
+    await expect(row.locator('.invd-member-role')).toHaveText('Owner', { timeout: 10_000 })
 
     // ── owner invariant: changing another owner is rejected (409) inline ──
-    // Capture the member PUT so we assert the server's verdict directly rather
-    // than only the eventual banner (which previously raced an uncommitted
-    // promotion). is_owner is committed above, so this is deterministic now.
+    // is_owner is committed above (chip reads Owner), so the PUT verdict is
+    // deterministic. Assert the server's 409 directly + the inline banner.
     const rejected = page.waitForResponse(
       (r) => /\/capi\/investigations\/[^/]+\/members\//.test(r.url())
         && r.request().method() === 'PUT',
       { timeout: 15_000 },
     )
-    await row.locator('input[data-testid^="cap-can_add_viz-"]').click()
+    await row.locator('[data-testid^="member-role-select-"]').selectOption('admin')
     expect((await rejected).status(), 'changing another owner must 409').toBe(409)
     await expect(page.locator('[data-testid="investigation-detail-error"]')).toBeVisible({ timeout: 10_000 })
   })
