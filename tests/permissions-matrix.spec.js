@@ -84,6 +84,13 @@ test.describe('Permissions matrix', () => {
     expect((await api(request, contrib.token, 'GET', `/data-stories/${sid}`)).status).toBe(200)
     expect([403, 404]).toContain((await api(request, outsider.token, 'GET', `/data-stories/${sid}`)).status)
     expect((await api(request, outsider.token, 'GET', `/investigations/${iid}`)).status).toBe(403)
+
+    // article "who has access & why" (parity): owner + inherited members surface
+    const eff = await api(request, owner, 'GET', `/data-stories/${sid}/effective-access`)
+    expect(eff.status).toBe(200)
+    const sources = (eff.body || []).map((r) => r.source)
+    expect(sources).toContain('owner')
+    expect(sources.some((x) => x && x.startsWith('inherited:'))).toBe(true)
   })
 
   test('PERM-2 GRANTING: adding a member grants inherited access', async ({ request }) => {
