@@ -54,7 +54,10 @@ async function apiSetup(request, token, method, path, data) {
 // An authenticated browser page for a persona (token-injected, same seam the
 // suite uses for the researcher — this is auth setup, not the behaviour under test).
 async function personaPage(browser, token) {
-  const ctx = await browser.newContext({ ignoreHTTPSErrors: true })
+  // Under the DAST runner, route persona traffic through ZAP too (so the
+  // multi-user permission flows are part of the passive scan).
+  const proxy = process.env.PLAYWRIGHT_PROXY ? { proxy: { server: process.env.PLAYWRIGHT_PROXY } } : {}
+  const ctx = await browser.newContext({ ignoreHTTPSErrors: true, ...proxy })
   await ctx.addInitScript((t) => { globalThis.__FONTEM_BOOTSTRAP_TOKEN__ = t }, token)
   const pg = await ctx.newPage()
   return { ctx, pg }

@@ -18,7 +18,7 @@ set -euo pipefail
 # and the report never made it to BookStack.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-NAMESPACE="gmr-dast"
+NAMESPACE="fontem-dast"
 # Use the external ingress (HTTPS) as the traffic source for the DAST
 # scan — exactly what real users hit. The smoke tests' playwright
 # config already skips cert validation for *.void42.internal (private
@@ -35,7 +35,7 @@ BOOKSTACK_TOKEN_SECRET=$(kubectl -n "$NAMESPACE" get secret bookstack-api -o jso
 BOOKSTACK_AUTH="Token ${BOOKSTACK_TOKEN_ID}:${BOOKSTACK_TOKEN_SECRET}"
 
 SMOKE_REPO="/config/repos/fontem-smoke-tests"
-WEB_REPO="/config/repos/gmr-web"
+WEB_REPO="/config/repos/fontem-web"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 
@@ -106,6 +106,7 @@ curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
 log "Running e2e tests through ZAP proxy (passive scan)..."
 cd "$WEB_REPO"
 BASE_URL="https://fontem.dast.void42.internal" \
+PLAYWRIGHT_PROXY="http://${ZAP_SERVICE}" \
     npx playwright test --project=chromium \
     --config=playwright.config.js \
     --grep-invert "ASSIST" 2>&1 | tail -5 || true
@@ -113,6 +114,7 @@ BASE_URL="https://fontem.dast.void42.internal" \
 log "Running smoke tests through ZAP proxy (passive scan)..."
 cd "$SMOKE_REPO"
 BASE_URL="https://fontem.dast.void42.internal" \
+PLAYWRIGHT_PROXY="http://${ZAP_SERVICE}" \
     npx playwright test --project=chromium \
     --grep-invert "ASSIST" 2>&1 | tail -5 || true
 
@@ -222,7 +224,7 @@ if command -v schemathesis >/dev/null 2>&1; then
         log "Fuzz user auth failed (HTTP $HTTP) — skipping Schemathesis."
         log "  Likely the fuzz user's password has drifted from"
         log "  FuzzPass123!. Reset via:"
-        log "    kubectl exec -n gmr-dast deploy/postgresql -- psql -U postgres \\"
+        log "    kubectl exec -n fontem-dast deploy/postgresql -- psql -U postgres \\"
         log "      -d gmr_app -c \"UPDATE users SET password_hash='<bcrypt>',"
         log "      failed_login_attempts=0, locked_until=NULL"
         log "      WHERE email='fuzz@gmr.test';\""
