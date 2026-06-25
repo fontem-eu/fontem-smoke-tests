@@ -54,9 +54,14 @@ kubectl create job "$JOB_NAME" --from=cronjob/zap-dast -n "$NAMESPACE"
 kubectl -n "$NAMESPACE" patch svc zap --type merge \
     -p "{\"spec\":{\"selector\":{\"job-name\":\"${JOB_NAME}\"}}}"
 
+log "Waiting for ZAP pod to be created..."
+for _ in $(seq 1 30); do
+    kubectl -n "$NAMESPACE" get pod -l "job-name=${JOB_NAME}" 2>/dev/null | grep -q "zap-scan" && break
+    sleep 2
+done
 log "Waiting for ZAP to be ready..."
 kubectl -n "$NAMESPACE" wait --for=condition=ready \
-    pod -l "job-name=${JOB_NAME}" --timeout=120s
+    pod -l "job-name=${JOB_NAME}" --timeout=300s
 
 # Wait for the ZAP API to respond
 for i in $(seq 1 120); do
@@ -99,7 +104,7 @@ curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
     >/dev/null 2>&1 || true
 curl -sf -k -X POST "${TARGET_CAPI}/auth/register" \
     -H "Content-Type: application/json" \
-    -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!","name":"Schemathesis Fuzz"}' \
+    -d '{"email":"fuzz@example.com","password":"FuzzPass123!","name":"Schemathesis Fuzz"}' \
     >/dev/null 2>&1 || true
 
 # ── Phase 3: Passive scan — e2e + smoke tests through ZAP ──
@@ -197,7 +202,7 @@ if command -v schemathesis >/dev/null 2>&1; then
     HTTP=$(curl -sk -o "$LOGIN_BODY" -w "%{http_code}" \
         -X POST "${TARGET_CAPI}/auth/login" \
         -H "Content-Type: application/json" \
-        -d '{"email":"fuzz@gmr.test","password":"FuzzPass123!"}')
+        -d '{"email":"fuzz@example.com","password":"FuzzPass123!"}')
     FUZZ_JWT=""
     if [ "$HTTP" = "200" ]; then
         FUZZ_JWT=$(python3 -c "import json,sys; print(json.load(open('$LOGIN_BODY')).get('access_token',''))" 2>/dev/null || true)
@@ -227,7 +232,7 @@ if command -v schemathesis >/dev/null 2>&1; then
         log "    kubectl exec -n fontem-dast deploy/postgresql -- psql -U postgres \\"
         log "      -d gmr_app -c \"UPDATE users SET password_hash='<bcrypt>',"
         log "      failed_login_attempts=0, locked_until=NULL"
-        log "      WHERE email='fuzz@gmr.test';\""
+        log "      WHERE email='fuzz@example.com';\""
     fi
 else
     log "Schemathesis install failed; skipping (pip --break-system-packages not allowed?)"
