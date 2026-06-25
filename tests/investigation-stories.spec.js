@@ -1,12 +1,11 @@
 /**
  * Investigation ↔ story association + delete semantics (M4).
  *
- * UI-drives the user-facing surface: create an investigation, create a story,
- * "Add to investigation" from the editor, and see it listed under the
- * investigation. The delete semantics (cascade vs orphan) have no UI in this
- * slice, so they're exercised via the authenticated API (the same content=
- * contract the backend exposes), verifying the story survives an orphan delete
- * and is removed by a cascade delete.
+ * Fully UI-driven: create an investigation, create a story, "Add to
+ * investigation" from the editor, see it listed, then DELETE the investigation
+ * through the detail view's owner control (cascade vs orphan), and verify the
+ * outcome by navigating to the article — it survives an orphan delete (its page
+ * still renders) and is gone after a cascade delete (the page shows its error).
  */
 import { test, expect } from './baseTest.js'
 
@@ -34,16 +33,13 @@ async function createStoryAndAddToInvestigation(page, invId) {
   return storyId
 }
 
-// Authenticated DELETE / GET via the in-page session token (no delete UI yet).
-function apiStatus(page, method, path) {
-  return page.evaluate(async ({ m, p }) => {
-    const r = await fetch(`/capi${p}`, {
-      method: m,
-      credentials: 'include',
-      headers: { Authorization: `Bearer ${window.__FONTEM_BOOTSTRAP_TOKEN__ || ''}` },
-    })
-    return r.status
-  }, { m: method, p: path })
+// Delete the investigation through the owner control in the detail view.
+async function deleteInvestigationViaUI(page, invId, mode) {
+  await page.goto(`/investigations/${invId}`)
+  await page.click('[data-testid="investigation-delete-btn"]')
+  await expect(page.locator('[data-testid="investigation-delete-confirm"]')).toBeVisible({ timeout: 10_000 })
+  await page.click(`[data-testid="investigation-delete-${mode}"]`)
+  await page.waitForURL(/\/investigations$/, { timeout: 15_000 })
 }
 
 test.describe('Investigation stories', () => {
@@ -65,9 +61,10 @@ test.describe('Investigation stories', () => {
     await page.goto(`/investigations/${invId}`)
     await expect(page.locator(`[data-testid="inv-story-${storyId}"]`)).toBeVisible({ timeout: 10_000 })
 
-    // orphan delete → story survives
-    expect(await apiStatus(page, 'DELETE', `/investigations/${invId}?content=orphan`)).toBe(204)
-    expect(await apiStatus(page, 'GET', `/data-stories/${storyId}`)).toBe(200)
+    // orphan delete via the UI → the article survives (its page still renders)
+    await deleteInvestigationViaUI(page, invId, 'orphan')
+    await page.goto(`/stories/${storyId}`)
+    await expect(page.locator('[data-testid="story-title"]')).toBeVisible({ timeout: 15_000 })
   })
 
   test('M4-CASCADE: add story → delete cascade removes the story', async ({ page }) => {
@@ -81,7 +78,9 @@ test.describe('Investigation stories', () => {
     const invId = await createInvestigation(page, `M4 Cascade ${RUN}`)
     const storyId = await createStoryAndAddToInvestigation(page, invId)
 
-    expect(await apiStatus(page, 'DELETE', `/investigations/${invId}?content=cascade`)).toBe(204)
-    expect(await apiStatus(page, 'GET', `/data-stories/${storyId}`)).toBe(404)
+    // cascade delete via the UI → the article is gone (its page shows the error)
+    await deleteInvestigationViaUI(page, invId, 'cascade')
+    await page.goto(`/stories/${storyId}`)
+    await expect(page.locator('[data-testid="story-error"]')).toBeVisible({ timeout: 15_000 })
   })
 })

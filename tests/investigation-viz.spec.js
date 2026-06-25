@@ -20,16 +20,6 @@ async function createInvestigation(page, name) {
   return page.url().match(/investigations\/([^/]+)/)[1]
 }
 
-function apiJson(page, path) {
-  return page.evaluate(async (p) => {
-    const r = await fetch(`/capi${p}`, {
-      credentials: 'include',
-      headers: { Authorization: `Bearer ${window.__FONTEM_BOOTSTRAP_TOKEN__ || ''}` },
-    })
-    return { status: r.status, body: await r.json().catch(() => null) }
-  }, path)
-}
-
 test.describe('Investigation visualizations', () => {
   test.setTimeout(180_000)
 
@@ -60,10 +50,12 @@ test.describe('Investigation visualizations', () => {
     await page.click(`[data-testid="pocket-inv-pick-${invId}"]`)
     await expect(page.locator('[data-testid="pocket-inv-picker"]')).toBeHidden({ timeout: 10_000 })
 
-    // listed under the investigation
-    const listed = await apiJson(page, `/visualizations?investigation_id=${invId}`)
-    expect(listed.status).toBe(200)
-    expect(listed.body.length, 'a viz is saved under the investigation').toBeGreaterThanOrEqual(1)
+    // listed under the investigation — assert it through the UI (the detail
+    // view's Visualizations section), not the API
+    await page.goto(`/investigations/${invId}`)
+    await expect(page.locator('[data-testid="investigation-viz"]')).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('[data-testid^="inv-viz-"]').first())
+      .toBeVisible({ timeout: 10_000 })
 
     // 3. a story, added to the same investigation
     await page.goto('/my-stories')

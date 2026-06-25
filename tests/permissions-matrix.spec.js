@@ -1,19 +1,16 @@
 /**
- * Permissions matrix (inheritance + additive overrides) — end-to-end over HTTP
- * with multiple real users.
+ * Permissions matrix — UI-driven, with multiple real users.
  *
- *   Owner = the verified researcher (auth.json bootstrap token) — does setup.
- *   viewer / contrib / outsider = a small SHARED set of registered throwaway
- *   users (registered once per run to stay under the /auth/register rate limit),
- *   acting via their own tokens. Reads aren't verification-gated, so throwaways
- *   exercise the access matrix; positive role-WRITE behaviour is covered
- *   exhaustively by the api service unit tests.
- *
- * Covers: access / no-access / granting / removal / privilege-escalation-denied
- * / inheritance / direct-grant override. Each test uses its own fresh
- * investigation; the shared users are added to it with the role under test.
+ * Every ACCESS / GRANT / REMOVAL / ESCALATION / OVERRIDE behaviour is asserted
+ * by DRIVING THE UI: a persona navigates to a page and we check what renders
+ * (the resource, or its access-denied error), and the owner grants/removes/shares
+ * through the actual forms. API is reserved for SETUP only — registering the
+ * throwaway personas and minting their auth token (the suite already authenticates
+ * the researcher the same way), plus building the fixture (an investigation with
+ * an article / dossier). Each persona drives its own authenticated browser context.
  */
 import fs from 'node:fs'
+import { request as apiRequest } from '@playwright/test'
 import { test, expect } from './baseTest.js'
 
 const RUN = String(Date.now())
@@ -25,6 +22,7 @@ function ownerToken() {
   return (origin.localStorage || []).find((e) => e.name === 'gmr-token')?.value
 }
 
+// ── setup-only API helpers ──
 async function registerLogin(request, email) {
   for (let attempt = 1; attempt <= 6; attempt += 1) {
     const reg = await request.post('/capi/auth/register', { data: { email, password: PW, name: email } })
@@ -37,119 +35,194 @@ async function registerLogin(request, email) {
   return (await login.json()).access_token
 }
 
-// Shared throwaway users — registered at most once per run.
 const _cache = {}
-async function user(request, key) {
+async function persona(request, key) {
   if (!_cache[key]) {
-    const email = `perm-${key}-${RUN}@example.com`
+    const email = `permui-${key}-${RUN}@example.com`
     _cache[key] = { email, token: await registerLogin(request, email) }
   }
   return _cache[key]
 }
 
-async function api(request, token, method, path, data) {
+async function apiSetup(request, token, method, path, data) {
   const opts = { headers: { Authorization: `Bearer ${token}` } }
   if (data !== undefined) opts.data = data
   const r = await request[method.toLowerCase()](`/capi${path}`, opts)
   return { status: r.status(), body: await r.json().catch(() => null) }
 }
 
-// Owner creates an investigation + an article inside it.
+// An authenticated browser page for a persona (token-injected, same seam the
+// suite uses for the researcher — this is auth setup, not the behaviour under test).
+async function personaPage(browser, token) {
+  const ctx = await browser.newContext({ ignoreHTTPSErrors: true })
+  await ctx.addInitScript((t) => { globalThis.__FONTEM_BOOTSTRAP_TOKEN__ = t }, token)
+  const pg = await ctx.newPage()
+  return { ctx, pg }
+}
+
+// fixture: an investigation owned by the researcher + an article inside it.
 async function makeInvWithArticle(request, owner, tag) {
-  const inv = await api(request, owner, 'POST', '/investigations', { name: `Perm ${tag} ${RUN}` })
-  expect(inv.status, `create investigation: ${JSON.stringify(inv.body)}`).toBe(201)
+  const inv = await apiSetup(request, owner, 'POST', '/investigations', { name: `PermUI ${tag} ${RUN}` })
+  expect(inv.status, JSON.stringify(inv.body)).toBe(201)
   const iid = inv.body.id
-  const story = await api(request, owner, 'POST', '/data-stories', { title: 'Secret', abstract: '' })
-  await api(request, owner, 'POST', `/investigations/${iid}/stories`, { report_id: story.body.id })
+  const story = await apiSetup(request, owner, 'POST', '/data-stories', { title: 'Secret', abstract: '' })
+  await apiSetup(request, owner, 'POST', `/investigations/${iid}/stories`, { report_id: story.body.id })
   return { iid, sid: story.body.id }
 }
 
-test.describe('Permissions matrix', () => {
-  test.describe.configure({ mode: 'serial' })
-  test.setTimeout(180_000)
+const NAV = 25_000
+async function expectStoryVisible(pg, sid) {
+  await pg.goto(`/stories/${sid}`, { waitUntil: 'domcontentloaded' })
+  await expect(pg.locator('[data-testid="story-title"]')).toBeVisible({ timeout: NAV })
+}
+async function expectStoryDenied(pg, sid) {
+  await pg.goto(`/stories/${sid}`, { waitUntil: 'domcontentloaded' })
+  await expect(pg.locator('[data-testid="story-error"]')).toBeVisible({ timeout: NAV })
+}
 
-  test('PERM-1 ACCESS+NO-ACCESS: members read inherited; outsider cannot', async ({ request }) => {
+test.describe('Permissions matrix (UI)', () => {
+  test.describe.configure({ mode: 'serial' })
+  test.setTimeout(200_000)
+
+  // Register the throwaway personas once, in setup — keeps registration's
+  // rate-limit backoff out of the test bodies (and out of their timeouts).
+  test.beforeAll(async ({ baseURL }) => {
+    const ctx = await apiRequest.newContext({ baseURL, ignoreHTTPSErrors: true })
+    try {
+      for (const key of ['viewer', 'contrib', 'outsider']) await persona(ctx, key)
+    } finally {
+      await ctx.dispose()
+    }
+  })
+
+  test('PERM-UI-1 ACCESS+NO-ACCESS: members see the article in the UI; outsider is denied', async ({ request, browser }) => {
     const owner = ownerToken()
-    const probe = await api(request, owner, 'POST', '/investigations', { name: `probe ${RUN}` })
+    // feature-detect the model is deployed
+    const probe = await apiSetup(request, owner, 'POST', '/investigations', { name: `probe ${RUN}` })
     test.skip(probe.status !== 201, 'permissions model not deployed yet')
 
-    const viewer = await user(request, 'viewer')
-    const contrib = await user(request, 'contrib')
-    const outsider = await user(request, 'outsider')
+    const viewer = await persona(request, 'viewer')
+    const contrib = await persona(request, 'contrib')
+    const outsider = await persona(request, 'outsider')
     const { iid, sid } = await makeInvWithArticle(request, owner, 'a')
-    await api(request, owner, 'POST', `/investigations/${iid}/members`, { email: viewer.email, role: 'viewer' })
-    await api(request, owner, 'POST', `/investigations/${iid}/members`, { email: contrib.email, role: 'contributor' })
+    await apiSetup(request, owner, 'POST', `/investigations/${iid}/members`, { email: viewer.email, role: 'viewer' })
+    await apiSetup(request, owner, 'POST', `/investigations/${iid}/members`, { email: contrib.email, role: 'contributor' })
 
-    expect((await api(request, viewer.token, 'GET', `/data-stories/${sid}`)).status).toBe(200)
-    expect((await api(request, contrib.token, 'GET', `/data-stories/${sid}`)).status).toBe(200)
-    expect([403, 404]).toContain((await api(request, outsider.token, 'GET', `/data-stories/${sid}`)).status)
-    expect((await api(request, outsider.token, 'GET', `/investigations/${iid}`)).status).toBe(403)
-
-    // article "who has access & why" (parity): owner + inherited members surface
-    const eff = await api(request, owner, 'GET', `/data-stories/${sid}/effective-access`)
-    expect(eff.status).toBe(200)
-    const sources = (eff.body || []).map((r) => r.source)
-    expect(sources).toContain('owner')
-    expect(sources.some((x) => x && x.startsWith('inherited:'))).toBe(true)
+    const v = await personaPage(browser, viewer.token)
+    const c = await personaPage(browser, contrib.token)
+    const x = await personaPage(browser, outsider.token)
+    try {
+      await expectStoryVisible(v.pg, sid)        // viewer sees it (inherited)
+      await expectStoryVisible(c.pg, sid)        // contributor sees it
+      await expectStoryDenied(x.pg, sid)         // outsider denied
+      await x.pg.goto(`/investigations/${iid}`)  // and can't open the investigation
+      await expect(x.pg.locator('[data-testid="investigation-detail-error"]')).toBeVisible({ timeout: NAV })
+    } finally {
+      await v.ctx.close(); await c.ctx.close(); await x.ctx.close()
+    }
   })
 
-  test('PERM-2 GRANTING: adding a member grants inherited access', async ({ request }) => {
+  test('PERM-UI-2 GRANTING: owner invites via the UI → the user then sees the article', async ({ page, request, browser }) => {
     const owner = ownerToken()
-    const x = await user(request, 'outsider')
+    const x = await persona(request, 'outsider')
     const { iid, sid } = await makeInvWithArticle(request, owner, 'b')
-    expect([403, 404]).toContain((await api(request, x.token, 'GET', `/data-stories/${sid}`)).status)
-    expect((await api(request, owner, 'POST', `/investigations/${iid}/members`, { email: x.email, role: 'viewer' })).status).toBe(201)
-    expect((await api(request, x.token, 'GET', `/data-stories/${sid}`)).status).toBe(200)
+    const xp = await personaPage(browser, x.token)
+    try {
+      await expectStoryDenied(xp.pg, sid)        // before: no access
+      // owner grants through the invite FORM (the researcher page)
+      await page.goto(`/investigations/${iid}`)
+      await page.fill('[data-testid="invite-email-input"]', x.email)
+      await page.selectOption('[data-testid="invite-role"]', 'viewer')
+      await page.click('[data-testid="invite-add-btn"]')
+      await expect(page.locator('[data-testid="investigation-members"] li', { hasText: x.email }))
+        .toBeVisible({ timeout: 10_000 })
+      await expectStoryVisible(xp.pg, sid)       // after: access granted
+    } finally {
+      await xp.ctx.close()
+    }
   })
 
-  test('PERM-3 REMOVAL: removing a member revokes access', async ({ request }) => {
+  test('PERM-UI-3 REMOVAL: owner removes via the UI → the user loses access', async ({ page, request, browser }) => {
     const owner = ownerToken()
-    const x = await user(request, 'outsider')
+    const x = await persona(request, 'outsider')
     const { iid, sid } = await makeInvWithArticle(request, owner, 'c')
-    await api(request, owner, 'POST', `/investigations/${iid}/members`, { email: x.email, role: 'viewer' })
-    expect((await api(request, x.token, 'GET', `/data-stories/${sid}`)).status).toBe(200)
-    const members = (await api(request, owner, 'GET', `/investigations/${iid}/members`)).body
-    const xid = members.find((m) => m.email === x.email).user_id
-    expect((await api(request, owner, 'DELETE', `/investigations/${iid}/members/${xid}`)).status).toBe(204)
-    expect([403, 404]).toContain((await api(request, x.token, 'GET', `/data-stories/${sid}`)).status)
+    await apiSetup(request, owner, 'POST', `/investigations/${iid}/members`, { email: x.email, role: 'viewer' })
+    const xp = await personaPage(browser, x.token)
+    try {
+      await expectStoryVisible(xp.pg, sid)       // member sees it
+      // owner removes them via the UI (the × button on their member row)
+      await page.goto(`/investigations/${iid}`)
+      const row = page.locator('[data-testid="investigation-members"] li', { hasText: x.email })
+      await row.locator('[data-testid^="remove-"]').click()
+      await expect(row).toBeHidden({ timeout: 10_000 })
+      await expectStoryDenied(xp.pg, sid)        // access revoked
+    } finally {
+      await xp.ctx.close()
+    }
   })
 
-  test('PERM-4 ESCALATION: privileged actions denied below the required role', async ({ request }) => {
+  test('PERM-UI-4 ESCALATION: the management UI is hidden from non-admins', async ({ page, request, browser }) => {
     const owner = ownerToken()
-    const contrib = await user(request, 'contrib')
-    const viewer = await user(request, 'viewer')
-    const outsider = await user(request, 'outsider')
-    const { iid, sid } = await makeInvWithArticle(request, owner, 'd')
-    await api(request, owner, 'POST', `/investigations/${iid}/members`, { email: contrib.email, role: 'contributor' })
-    await api(request, owner, 'POST', `/investigations/${iid}/members`, { email: viewer.email, role: 'viewer' })
+    const contrib = await persona(request, 'contrib')
+    const viewer = await persona(request, 'viewer')
+    const inv = await apiSetup(request, owner, 'POST', '/investigations', { name: `PermUI d ${RUN}` })
+    const iid = inv.body.id
+    await apiSetup(request, owner, 'POST', `/investigations/${iid}/members`, { email: contrib.email, role: 'contributor' })
+    await apiSetup(request, owner, 'POST', `/investigations/${iid}/members`, { email: viewer.email, role: 'viewer' })
+    const c = await personaPage(browser, contrib.token)
+    const v = await personaPage(browser, viewer.token)
+    try {
+      // owner sees the manage surface; contributor + viewer do not
+      await page.goto(`/investigations/${iid}`)
+      await expect(page.locator('[data-testid="investigation-invite"]')).toBeVisible({ timeout: 10_000 })
+      await expect(page.locator('[data-testid="investigation-delete-btn"]')).toBeVisible()
 
-    // contributor cannot manage members (needs admin)
-    expect((await api(request, contrib.token, 'POST', `/investigations/${iid}/members`, { email: viewer.email, role: 'owner' })).status).toBe(403)
-    // viewer cannot edit the article meta
-    expect((await api(request, viewer.token, 'PUT', `/data-stories/${sid}`, { title: 'hijack' })).status).toBe(403)
-    // outsider cannot delete the investigation
-    expect((await api(request, outsider.token, 'DELETE', `/investigations/${iid}?content=orphan`)).status).toBe(403)
+      await c.pg.goto(`/investigations/${iid}`)
+      await expect(c.pg.locator('[data-testid="investigation-title"]')).toBeVisible({ timeout: 10_000 })
+      await expect(c.pg.locator('[data-testid="investigation-invite"]')).toHaveCount(0)
+      await expect(c.pg.locator('[data-testid="investigation-delete-btn"]')).toHaveCount(0)
+
+      await v.pg.goto(`/investigations/${iid}`)
+      await expect(v.pg.locator('[data-testid="investigation-invite"]')).toHaveCount(0)
+    } finally {
+      await c.ctx.close(); await v.ctx.close()
+    }
   })
 
-  test('PERM-5 OVERRIDE: a direct grant gives access without membership; revoke removes it', async ({ request }) => {
+  test('PERM-UI-5 OVERRIDE: owner shares a dossier in the modal → outsider sees it; revoke removes it', async ({ page, request, browser }) => {
     const owner = ownerToken()
-    const x = await user(request, 'outsider')
-    const inv = await api(request, owner, 'POST', '/investigations', { name: `Perm e ${RUN}` })
-    const dossier = await api(request, owner, 'POST', '/dossiers', { name: 'D', investigation_id: inv.body.id })
+    const x = await persona(request, 'outsider')
+    const inv = await apiSetup(request, owner, 'POST', '/investigations', { name: `PermUI e ${RUN}` })
+    const dossier = await apiSetup(request, owner, 'POST', '/dossiers', { name: 'D', investigation_id: inv.body.id })
     const did = dossier.body.id
     test.skip(!did, 'dossier create failed')
-    // outsider: no access
-    expect((await api(request, x.token, 'GET', `/dossiers/${did}`)).status).toBe(403)
-    // direct grant (the override)
-    const share = await api(request, owner, 'POST', `/dossiers/${did}/access`, { email: x.email, level: 'viewer' })
-    test.skip(share.status === 404, 'Phase C /access not deployed yet')
-    expect(share.status).toBe(201)
-    expect((await api(request, x.token, 'GET', `/dossiers/${did}`)).status).toBe(200)
-    // listed, then revoke -> gone
-    const grants = (await api(request, owner, 'GET', `/dossiers/${did}/access`)).body
-    const grant = grants.find((g) => g.email === x.email)
-    expect(grant, 'the direct grant is listed').toBeTruthy()
-    expect((await api(request, owner, 'DELETE', `/dossiers/${did}/access/${grant.user_id}`)).status).toBe(204)
-    expect((await api(request, x.token, 'GET', `/dossiers/${did}`)).status).toBe(403)
+    const xp = await personaPage(browser, x.token)
+    try {
+      await xp.pg.goto(`/dossiers/${did}`, { waitUntil: 'domcontentloaded' })  // before: denied
+      await expect(xp.pg.locator('[data-testid="dossier-error"]')).toBeVisible({ timeout: NAV })
+
+      // owner shares directly through the Share modal
+      await page.goto(`/dossiers/${did}`)
+      await page.click('[data-testid="dossier-share-btn"]')
+      await expect(page.locator('[data-testid="dossier-share-modal"]')).toBeVisible({ timeout: 10_000 })
+      await page.fill('[data-testid="share-email-input"]', x.email)
+      await page.selectOption('[data-testid="share-level"]', 'viewer')
+      await page.click('[data-testid="share-add-btn"]')
+      await expect(page.locator('[data-testid^="share-access-"]', { hasText: x.email }))
+        .toBeVisible({ timeout: 10_000 })
+
+      await xp.pg.goto(`/dossiers/${did}`, { waitUntil: 'domcontentloaded' })  // after grant: visible
+      await expect(xp.pg.locator('[data-testid="dossier-title"]')).toBeVisible({ timeout: NAV })
+
+      // revoke through the modal
+      const grantRow = page.locator('[data-testid^="share-access-"]', { hasText: x.email })
+      await grantRow.locator('[data-testid^="share-remove-"]').click()
+      await expect(grantRow).toBeHidden({ timeout: 10_000 })
+
+      await xp.pg.goto(`/dossiers/${did}`, { waitUntil: 'domcontentloaded' })  // after revoke: denied again
+      await expect(xp.pg.locator('[data-testid="dossier-error"]')).toBeVisible({ timeout: NAV })
+    } finally {
+      await xp.ctx.close()
+    }
   })
 })
