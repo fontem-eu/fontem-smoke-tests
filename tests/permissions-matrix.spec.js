@@ -24,13 +24,21 @@ function ownerToken() {
 
 // ── setup-only API helpers ──
 async function registerLogin(request, email) {
-  for (let attempt = 1; attempt <= 6; attempt += 1) {
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
     const reg = await request.post('/capi/auth/register', { data: { email, password: PW, name: email } })
-    if (reg.ok() || reg.status() === 409) break
+    if (reg.ok() || reg.status() === 409) break       // created, or already exists — done
     if (reg.status() !== 429) throw new Error(`register ${email}: HTTP ${reg.status()}`)
-    await new Promise((r) => { setTimeout(r, 3000 * attempt) })
+    await new Promise((r) => { setTimeout(r, Math.min(2000 * attempt, 6000)) })  // bounded backoff
   }
-  const login = await request.post('/capi/auth/login', { data: { email, password: PW } })
+  // Login is rate-limited too (researcher + 3 personas log in back-to-back),
+  // so retry it on 429 with the same bounded backoff — a single 429 here was
+  // the real source of the PERM-UI flake.
+  let login
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    login = await request.post('/capi/auth/login', { data: { email, password: PW } })
+    if (login.ok() || login.status() !== 429) break
+    await new Promise((r) => { setTimeout(r, Math.min(2000 * attempt, 6000)) })
+  }
   expect(login.ok(), `login ${email}: HTTP ${login.status()}`).toBeTruthy()
   return (await login.json()).access_token
 }
@@ -38,7 +46,7 @@ async function registerLogin(request, email) {
 const _cache = {}
 async function persona(request, key) {
   if (!_cache[key]) {
-    const email = `permui-${key}-${RUN}@example.com`
+    const email = `permui-${key}@example.com`  // stable: 409 on re-runs => no rate-limit
     _cache[key] = { email, token: await registerLogin(request, email) }
   }
   return _cache[key]
@@ -90,6 +98,10 @@ test.describe('Permissions matrix (UI)', () => {
   // Register the throwaway personas once, in setup — keeps registration's
   // rate-limit backoff out of the test bodies (and out of their timeouts).
   test.beforeAll(async ({ baseURL }) => {
+    // Registering 3 personas can hit the auth rate-limiter; registerLogin backs
+    // off up to ~60s each, which blows the default 60s *hook* timeout. Give the
+    // setup hook its own generous budget (this is setup, not the test).
+    test.setTimeout(240_000)
     const ctx = await apiRequest.newContext({ baseURL, ignoreHTTPSErrors: true })
     try {
       for (const key of ['viewer', 'contrib', 'outsider']) await persona(ctx, key)

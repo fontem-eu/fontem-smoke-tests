@@ -513,10 +513,21 @@ test.describe.serial('Production Smoke Tests', () => {
     await popup.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
     // We land on TED, on a real (non-blank) page about this contract.
     expect(popup.url()).toMatch(/ted\.europa\.eu/)
-    const bodyText = (await popup.locator('body').innerText().catch(() => '')) || ''
-    expect(bodyText.length).toBeGreaterThan(200)
-    await expect(popup.locator(`text=${titleChunk}`).first())
-      .toBeVisible({ timeout: 20_000 })
+    // The external TED page hydrates asynchronously and we don't control its
+    // render timing — poll its *rendered text* (substantive AND about THIS
+    // contract) instead of waiting on a single element's visibility, which
+    // races the external render and was the source of intermittent flakes.
+    const normTed = (t) => (t || '').toLowerCase().replace(/\s+/g, ' ')
+    const wantChunk = normTed(contractTitle).slice(0, 14)
+    await expect
+      .poll(async () => {
+        const t = normTed(await popup.locator('body').innerText().catch(() => ''))
+        return t.length > 200 && t.includes(wantChunk)
+      }, {
+        timeout: 35_000,
+        message: `TED notice should render substantive text incl. "${contractTitle.slice(0, 20)}"`,
+      })
+      .toBe(true)
     await demoMark(page, 'TED page shows the contract title ✓', 2500)
     await popup.close()
   })
