@@ -3,7 +3,7 @@
  *
  * Exercises the full new path end-to-end through the UI:
  *   1. open a data-quality dashboard (charts now wrapped in PocketableChart)
- *   2. save a couple of visualizations to the pocket  (widget_type: chart_snapshot)
+ *   2. save a couple of visualizations to the pocket  (widget_type: dq_chart recipe)
  *   3. create a data story and insert those saved widgets from the pocket
  *   4. save, reload the editor, and confirm the widgets persisted + re-render
  *
@@ -59,13 +59,13 @@ test.describe('Pocketable charts → data story', () => {
     await saveChart(0, nameA)
     await saveChart(1, nameB)
 
-    // Both must land in the (localStorage) pocket as chart_snapshot items
-    // carrying a serialised chart + props.
+    // Both must land in the (localStorage) pocket as dq_chart recipe items
+    // carrying { data_params: { chart_key } } — params, never inline data.
     const snaps = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem('gmr-pocket') || '[]').filter((p) => p.widget_type === 'chart_snapshot'),
+      JSON.parse(localStorage.getItem('gmr-pocket') || '[]').filter((p) => p.widget_type === 'dq_chart'),
     )
-    expect(snaps.length, 'two chart_snapshot items should be in the pocket').toBeGreaterThanOrEqual(2)
-    expect(snaps[0].config.chart, 'snapshot config carries a chart type').toBeTruthy()
+    expect(snaps.length, 'two dq_chart recipe items should be in the pocket').toBeGreaterThanOrEqual(2)
+    expect(snaps[0].config.data_params?.chart_key, 'recipe carries a chart_key (params, not data)').toBeTruthy()
 
     // ── 3. Create a fresh data story ──
     await page.goto('/my-stories')
@@ -93,9 +93,9 @@ test.describe('Pocketable charts → data story', () => {
     await insertFromPocket(nameA)
     await insertFromPocket(nameB)
 
-    // Both widget nodes render in the editor, as chart_snapshot embeds.
+    // Both widget nodes render in the editor, as dq_chart (DqChartEmbed) embeds.
     await expect(page.locator('[data-testid="widget-node"]')).toHaveCount(2, { timeout: 10_000 })
-    await expect(page.locator('[data-testid="widget-chart-snapshot"]')).toHaveCount(2)
+    await expect(page.locator('[data-testid="widget-viz"]')).toHaveCount(2)
 
     // ── 5. Save, reload the editor, confirm the widgets persisted ──
     await page.click('[data-testid="save-story"]')
@@ -104,8 +104,8 @@ test.describe('Pocketable charts → data story', () => {
     await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 15_000 })
     await expect(
-      page.locator('[data-testid="widget-chart-snapshot"]'),
-      'saved chart_snapshot widgets re-render after a reload (round-trip persisted)',
+      page.locator('[data-testid="widget-viz"]'),
+      'saved dq_chart widgets re-render after a reload (round-trip persisted)',
     ).toHaveCount(2, { timeout: 20_000 })
   })
 
