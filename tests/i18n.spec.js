@@ -79,12 +79,10 @@ for (const loc of LOCALES) {
     const pageErrors = []
     page.on('pageerror', (e) => pageErrors.push(e.message))
 
-    await page.goto('/', { waitUntil: 'networkidle' })
-
-    // Open preferences → language picker → select the target locale.
-    // The picker is a native <select>, so selectOption is enough.
-    await page.getByTestId('prefs-menu-trigger').click()
-    await page.getByTestId("prefs-lang-picker").selectOption(loc.code)
+    // Language now lives on the /account settings screen (the top-right
+    // menu was slimmed to profile/auth actions only).
+    await page.goto('/account', { waitUntil: 'networkidle' })
+    await page.getByTestId('account-lang-picker').selectOption(loc.code)
 
     // The lang attribute on <html> is the synchronous side effect of
     // useLang.applyLang — a fast assertion that the switch fired
@@ -93,6 +91,9 @@ for (const loc of LOCALES) {
       () => page.evaluate(() => document.documentElement.lang),
       { timeout: 5000 },
     ).toBe(loc.code)
+
+    // Back to the home page for the plural probes + document.title.
+    await page.goto('/', { waitUntil: 'networkidle' })
 
     // Plural badges re-render once setLocaleMessage resolves and the
     // watcher ticks; this is the assertion that pins the CSP / new
