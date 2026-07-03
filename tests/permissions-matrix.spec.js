@@ -81,6 +81,20 @@ async function makeInvWithArticle(request, owner, tag) {
   return { iid, sid: story.body.id }
 }
 
+// fixture: an investigation owned by the researcher + a data project attached.
+async function makeInvWithProject(request, owner, tag) {
+  const inv = await apiSetup(request, owner, 'POST', '/investigations', { name: `PermUI ${tag} ${RUN}` })
+  const iid = inv.body.id
+  const proj = await apiSetup(request, owner, 'POST', '/studio/projects',
+    { name: `Shared ${tag} ${RUN}`, investigation_id: iid })
+  await apiSetup(request, owner, 'POST', `/studio/projects/${proj.body.id}/queries`,
+    { name: 'q', lang: 'cypher', query: 'MATCH (n) RETURN n LIMIT 1' })
+  return { iid, pid: proj.body.id }
+}
+async function openProject(pg, pid) {
+  await pg.goto(`/studio/p/${pid}`, { waitUntil: 'domcontentloaded' })
+}
+
 const NAV = 25_000
 async function expectStoryVisible(pg, sid) {
   await pg.goto(`/stories/${sid}`, { waitUntil: 'domcontentloaded' })
@@ -236,6 +250,83 @@ test.describe('Permissions matrix (UI)', () => {
 
       await xp.pg.goto(`/dossiers/${did}`, { waitUntil: 'domcontentloaded' })  // after revoke: denied again
       await expect(xp.pg.locator('[data-testid="dossier-error"]')).toBeVisible({ timeout: NAV })
+    } finally {
+      await xp.ctx.close()
+    }
+  })
+
+  test('PERM-UI-6 STUDIO: owner edits, viewer read-only, outsider denied', async ({ page, request, browser }) => {
+    const owner = ownerToken()
+    // feature-detect the studio sharing model is deployed (my_access present)
+    const probe = await apiSetup(request, owner, 'POST', '/studio/projects', { name: `probe ${RUN}` })
+    test.skip(probe.status !== 201, 'studio not deployed')
+    const feat = await apiSetup(request, owner, 'GET', `/studio/projects/${probe.body.id}`)
+    test.skip(!(feat.body && feat.body.my_access), 'studio sharing not deployed yet')
+
+    // NOTE: throwaway personas are email-unverified, and every EDIT/SHARE action
+    // is verification-gated platform-wide — so an unverified member can only
+    // VIEW. We therefore drive the EDIT case from the verified owner and use the
+    // personas for the read-only / denied floor (the security-critical cases).
+    const viewer = await persona(request, 'viewer')
+    const outsider = await persona(request, 'outsider')
+    const { iid, pid } = await makeInvWithProject(request, owner, 'f')
+    await apiSetup(request, owner, 'POST', `/investigations/${iid}/members`, { email: viewer.email, role: 'viewer' })
+
+    const v = await personaPage(browser, viewer.token)
+    const x = await personaPage(browser, outsider.token)
+    try {
+      // owner (verified): full edit + share affordances, owner badge
+      await page.goto(`/studio/p/${pid}`)
+      await expect(page.locator('[data-testid="project-access"]')).toHaveText('owner', { timeout: NAV })
+      await expect(page.locator('[data-testid="project-new-query"]')).toBeVisible()
+      await expect(page.locator('[data-testid="project-share"]')).toBeVisible()
+      await expect(page.locator('[data-testid="project-readonly"]')).toHaveCount(0)
+      // viewer member: read-only banner + badge, NO create/share (can't escalate)
+      await openProject(v.pg, pid)
+      await expect(v.pg.locator('[data-testid="project-readonly"]')).toBeVisible({ timeout: NAV })
+      await expect(v.pg.locator('[data-testid="project-access"]')).toHaveText('viewer')
+      await expect(v.pg.locator('[data-testid="project-new-query"]')).toHaveCount(0)
+      await expect(v.pg.locator('[data-testid="project-share"]')).toHaveCount(0)
+      // outsider: bounced off — the project view never renders
+      await openProject(x.pg, pid)
+      await expect(x.pg.locator('[data-testid="project-access"]')).toHaveCount(0)
+    } finally {
+      await v.ctx.close(); await x.ctx.close()
+    }
+  })
+
+  test('PERM-UI-7 STUDIO OVERRIDE: owner shares a project in the modal → outsider gains read access; revoke removes it', async ({ page, request, browser }) => {
+    const owner = ownerToken()
+    const probe = await apiSetup(request, owner, 'POST', '/studio/projects', { name: `probe2 ${RUN}` })
+    test.skip(probe.status !== 201, 'studio not deployed')
+    const feat = await apiSetup(request, owner, 'GET', `/studio/projects/${probe.body.id}`)
+    test.skip(!(feat.body && feat.body.my_access), 'studio sharing not deployed yet')
+
+    const x = await persona(request, 'outsider')
+    const proj = await apiSetup(request, owner, 'POST', '/studio/projects', { name: `OverrideShare ${RUN}` })
+    const pid = proj.body.id
+    const xp = await personaPage(browser, x.token)
+    try {
+      await openProject(xp.pg, pid)                                   // before: denied
+      await expect(xp.pg.locator('[data-testid="project-access"]')).toHaveCount(0)
+      // owner shares directly through the studio Share modal
+      await page.goto(`/studio/p/${pid}`)
+      await page.click('[data-testid="project-share"]')
+      await expect(page.locator('[data-testid="studio-share-modal"]')).toBeVisible({ timeout: 10_000 })
+      await page.fill('[data-testid="studio-share-email"]', x.email)
+      await page.selectOption('[data-testid="studio-share-level"]', 'viewer')
+      await page.click('[data-testid="studio-share-add"]')
+      await expect(page.locator('[data-testid="studio-grant"]', { hasText: x.email }))
+        .toBeVisible({ timeout: 10_000 })
+      // after grant: outsider can open it read-only
+      await openProject(xp.pg, pid)
+      await expect(xp.pg.locator('[data-testid="project-readonly"]')).toBeVisible({ timeout: NAV })
+      // revoke through the modal → denied again
+      const grantRow = page.locator('[data-testid="studio-grant"]', { hasText: x.email })
+      await grantRow.locator('[data-testid="studio-grant-remove"]').click()
+      await expect(grantRow).toBeHidden({ timeout: 10_000 })
+      await openProject(xp.pg, pid)
+      await expect(xp.pg.locator('[data-testid="project-access"]')).toHaveCount(0)
     } finally {
       await xp.ctx.close()
     }
