@@ -40,7 +40,7 @@ export default defineConfig({
       name: 'chromium',
       // Desktop suite covers tests/{smoke,auth-helper,consolidator,i18n}.spec.js
       // — the mobile spec is opted out via the matcher below.
-      testMatch: /(atlas-widget|smoke|auth-helper|consolidator|i18n|pocket-story|investigations|investigation-stories|investigation-viz|permissions-matrix|dossiers|data-studio)\.spec\.js$/,
+      testMatch: /(atlas-widget|smoke|auth-helper|consolidator|i18n|pocket-story|investigations|investigation-stories|investigation-viz|permissions-matrix|dossiers|data-studio|articles)\.spec\.js$/,
       use: { ...devices['Desktop Chrome'] },
     },
     {
