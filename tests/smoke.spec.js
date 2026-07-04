@@ -2563,7 +2563,7 @@ test.describe.serial('Production Smoke Tests', () => {
   // it means either the cron hasn't run yet (give it 24h) or the
   // consolidator path drifted again.
 
-  test('CONSOLIDATION-1: graph CLIENT_OF count matches contracts list count', async ({ page }) => {
+  test('CONSOLIDATION-1: graph explorer and contracts list agree (retired summary edges stay retired)', async ({ page }) => {
     test.setTimeout(60_000)
     await uiLogin(page)
 
@@ -2575,32 +2575,41 @@ test.describe.serial('Production Smoke Tests', () => {
     if (!authority) test.skip(true, 'eu-LISA not present — graph data was probably re-loaded')
     const authorityId = authority.authority_id
 
-    // Live count: AWARDED edges from the canonical to Contract nodes.
+    // Surface 1: the contracts list — contract_count counts AWARDED
+    // contracts (the list itself fans out one row per winner, so
+    // multi-winner awards legitimately show more rows than the count).
     const contractsRes = await page.request.get(
       `/api/authorities/${encodeURIComponent(authorityId)}/contracts?limit=200`,
     )
     expect(contractsRes.ok(), 'contracts endpoint reachable').toBe(true)
     const contracts = await contractsRes.json()
     const liveCount = contracts.contract_count
+    // The explorer caps the neighborhood at ~500 nodes; if eu-LISA ever
+    // outgrows that, the equality below stops being meaningful.
+    test.skip(liveCount > 400, `eu-LISA has ${liveCount} contracts — beyond the explorer node cap`)
 
-    // Materialised count: sum of CLIENT_OF.contracts on the canonical's
-    // outgoing edges. summary=true is the graph view's default.
+    // Surface 2: the graph explorer traverses AWARDED directly since
+    // the trade-summary materialiser was deleted (fontem-api#222).
     const graphRes = await page.request.get(
-      `/api/graph/${encodeURIComponent(authorityId)}?depth=1&summary=true`,
+      `/api/graph/${encodeURIComponent(authorityId)}?depth=1`,
     )
     expect(graphRes.ok(), 'graph endpoint reachable').toBe(true)
     const graph = await graphRes.json()
-    const materialisedCount = (graph.edges || [])
-      .filter((e) => e.type === 'CLIENT_OF' && e.source === authorityId)
-      .reduce((acc, e) => acc + (e.properties?.contracts || 0), 0)
+    const edgeTypes = (graph.edges || []).map((e) => e.type)
 
+    // The retired summary layer must never leak back: not from stale
+    // leftovers, not from a merge tool re-creating it.
+    expect(edgeTypes, 'retired CLIENT_OF leaked into the explorer').not.toContain('CLIENT_OF')
+    expect(edgeTypes, 'retired SUPPLIER_OF leaked into the explorer').not.toContain('SUPPLIER_OF')
+
+    // And the two live surfaces must agree on how many contracts exist.
+    const awardedCount = (graph.edges || [])
+      .filter((e) => e.type === 'AWARDED' && e.source === authorityId).length
     expect(
-      materialisedCount,
-      `eu-LISA visibility split: graph view sees ${materialisedCount} contracts via ` +
-      `CLIENT_OF, contracts list sees ${liveCount} via AWARDED. The two views ` +
-      `must agree — if they don't, the trade-summary edges are stale relative ` +
-      `to AWARDED and the consolidator's post-merge refresh or the nightly ` +
-      `materialize_trade_edges cron is broken.`,
+      awardedCount,
+      `eu-LISA visibility split: graph explorer sees ${awardedCount} AWARDED ` +
+      `contracts, the contracts list counts ${liveCount}. The two views must ` +
+      `agree — a gap means the traversal and the count query have drifted.`,
     ).toBe(liveCount)
   })
 
