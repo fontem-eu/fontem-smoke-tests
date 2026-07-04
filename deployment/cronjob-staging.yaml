@@ -39,7 +39,7 @@ spec:
             - name: regcred
           containers:
             - name: smoke
-              image: contribute.void42.internal/fontem/fontem-smoke-tests:v55a0f2a
+              image: contribute.void42.internal/fontem/fontem-smoke-tests:v8b97f8a
               env:
                 - name: BASE_URL
                   value: "https://fontem.testing.void42.internal"
