@@ -69,12 +69,12 @@ test.describe('Article translations', () => {
     // ── reader: switch to the translation, see translated text, no badge ──
     await page.goto(`/stories/${sid}`)
     await expect(page.locator('[data-testid="translation-bar"]')).toBeVisible({ timeout: 20_000 })
-    await page.click('[data-testid="translation-chip-pt"]')
+    await page.selectOption('[data-testid="translation-picker"]', 'pt')
     await expect(page.locator('[data-testid="story-title"]')).toHaveText(PT_TITLE, { timeout: 15_000 })
     await expect(page.locator('[data-testid="story-body"]')).toContainText(PT_BODY)
     await expect(page.locator('[data-testid="translation-outdated-badge"]')).toHaveCount(0)
     // and back to the original
-    await page.click('[data-testid="translation-original"]')
+    await page.selectOption('[data-testid="translation-picker"]', '')
     await expect(page.locator('[data-testid="story-body"]')).toContainText(EN_BODY)
 
     // ── the original moves on: translation becomes potentially outdated ──
@@ -83,7 +83,7 @@ test.describe('Article translations', () => {
 
     await page.goto(`/stories/${sid}`)
     await expect(page.locator('[data-testid="translation-bar"]')).toBeVisible({ timeout: 20_000 })
-    await page.click('[data-testid="translation-chip-pt"]')
+    await page.selectOption('[data-testid="translation-picker"]', 'pt')
     // translated text still renders…
     await expect(page.locator('[data-testid="story-body"]')).toContainText(PT_BODY, { timeout: 15_000 })
     // …under the yellow potentially-outdated label
@@ -102,9 +102,23 @@ test.describe('Article translations', () => {
     // ── reader again: the badge is gone, the text was never touched ──
     await page.goto(`/stories/${sid}`)
     await expect(page.locator('[data-testid="translation-bar"]')).toBeVisible({ timeout: 20_000 })
-    await page.click('[data-testid="translation-chip-pt"]')
+    await page.selectOption('[data-testid="translation-picker"]', 'pt')
     await expect(page.locator('[data-testid="story-body"]')).toContainText(PT_BODY, { timeout: 15_000 })
     await expect(page.locator('[data-testid="translation-outdated-badge"]')).toHaveCount(0)
+  })
+
+  test('TRANS-03: story opens in the reader UI language when a translation exists', async ({ page }) => {
+    test.skip(!sid, 'TRANS-01 setup did not run')
+    // Reader prefers Portuguese -> the PT translation loads without any interaction.
+    await page.addInitScript(() => localStorage.setItem('gmr-lang', 'pt'))
+    await page.goto(`/stories/${sid}`)
+    await expect(page.locator('[data-testid="story-title"]')).toHaveText(PT_TITLE, { timeout: 20_000 })
+    await expect(page.locator('[data-testid="translation-picker"]')).toHaveValue('pt')
+    // Reader prefers German (no translation) -> the original loads.
+    await page.addInitScript(() => localStorage.setItem('gmr-lang', 'de'))
+    await page.goto(`/stories/${sid}`)
+    await expect(page.locator('[data-testid="story-body"]')).toContainText(EN_BODY_V2, { timeout: 20_000 })
+    await expect(page.locator('[data-testid="translation-picker"]')).toHaveValue('')
   })
 
   test('TRANS-02: untranslated language prefills the editor with the original', async ({ page, request }) => {
