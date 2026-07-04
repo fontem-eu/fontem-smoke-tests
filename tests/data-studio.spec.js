@@ -48,13 +48,20 @@ test.describe('data studio — server-backed projects, queries, plots', () => {
     // SERVER-SIDE PERSISTENCE: reload the editor URL cold — the query survives.
     await page.goto(qUrl)
     await expect(page.locator('[data-testid="studio-query-view"]')).toBeVisible({ timeout: 15_000 })
-    await expect(page.locator('[data-testid="query-editor"]')).toHaveValue(/MATCH/)
+    // CodeMirror renders a contenteditable div, not a textarea — assert
+    // the persisted query text through the editor's content element.
+    await expect(page.locator('[data-testid="query-editor"] .cm-content')).toContainText('MATCH')
 
     // Combine in DuckDB-WASM and SAVE the plot to the project.
     await page.goto(`/studio/p/${pid}/plot`)
     await expect(page.locator('[data-testid="studio-plot-view"]')).toBeVisible({ timeout: 15_000 })
     await page.check('[data-testid="plot-query-toggle"] input')
-    await page.fill('[data-testid="plot-transform-sql"]', 'SELECT count(*) AS companies, sum(contracts) AS total FROM q1')
+    // The transform editor is CodeMirror (contenteditable), not a textarea:
+    // click in, select-all, and type. closeBrackets types-over the auto ')'.
+    const tf = page.locator('[data-testid="plot-transform-sql"] .cm-content')
+    await tf.click()
+    await page.keyboard.press('ControlOrMeta+a')
+    await page.keyboard.type('SELECT count(*) AS companies, sum(contracts) AS total FROM q1')
     await page.click('[data-testid="plot-combine"]')
     await expect(page.locator('[data-testid="plot-result"]')).toBeVisible({ timeout: 45_000 })
     const resultText = (await page.locator('[data-testid="plot-result"]').textContent()) || ''
