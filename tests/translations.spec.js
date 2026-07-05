@@ -121,6 +121,35 @@ test.describe('Article translations', () => {
     await expect(page.locator('[data-testid="translation-picker"]')).toHaveValue('')
   })
 
+  test('TRANS-04: story lists show the translated title for the reader language', async ({ page }) => {
+    test.skip(!sid, 'TRANS-01 setup did not run')
+    await page.addInitScript(() => localStorage.setItem('gmr-lang', 'pt'))
+    await page.goto('/my-stories')
+    // the card for the seeded story carries the PT title, not the original
+    await expect(page.getByText(PT_TITLE).first()).toBeVisible({ timeout: 20_000 })
+  })
+
+  test('TRANS-05: anonymous first visit infers language from the IP country', async ({ browser }) => {
+    // Fresh context: no auth token, no localStorage — the platform only
+    // has the caller's IP. The runner egresses from a French address, so
+    // the geo endpoint should answer fr and the SPA should adopt it.
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true })
+    const page = await ctx.newPage()
+    const geo = await page.request.get('/api/geo/client-language')
+    expect(geo.ok()).toBe(true)
+    const hint = await geo.json()
+    test.skip(!hint.lang, `IP ${hint.country || 'unknown'} has no language mapping — cannot assert adoption`)
+
+    await page.goto('/')
+    await expect
+      .poll(async () => page.evaluate(() => document.documentElement.lang), { timeout: 15_000 })
+      .toBe(hint.lang)
+    // detection is a hint, not a choice — nothing persisted
+    expect(await page.evaluate(() => localStorage.getItem('gmr-lang'))).toBeNull()
+    expect(await page.evaluate(() => sessionStorage.getItem('gmr-geo-lang'))).toBe(hint.lang)
+    await ctx.close()
+  })
+
   test('TRANS-02: untranslated language prefills the editor with the original', async ({ page, request }) => {
     test.skip(!sid, 'TRANS-01 setup did not run')
     await page.goto(`/stories/${sid}/edit`)
