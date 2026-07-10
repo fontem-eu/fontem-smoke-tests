@@ -49,5 +49,10 @@ test.describe('Profile editing', () => {
     await page.setInputFiles('[data-testid="profile-avatar-input"]', PHOTO)
     await expect(page.locator('[data-testid="user-avatar-img"]').first()).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('[data-testid="profile-reposition"]')).toBeVisible({ timeout: 10_000 })
+
+    // 4. the top-right header ball now shows the uploaded photo, not initials
+    await expect(
+      page.locator('[data-testid="profile-trigger"] [data-testid="user-avatar-img"]'),
+    ).toBeVisible({ timeout: 10_000 })
   })
 })
