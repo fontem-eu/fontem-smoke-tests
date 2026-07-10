@@ -50,9 +50,13 @@ test.describe('Profile editing', () => {
     await expect(page.locator('[data-testid="user-avatar-img"]').first()).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('[data-testid="profile-reposition"]')).toBeVisible({ timeout: 10_000 })
 
-    // 4. the top-right header ball now shows the uploaded photo, not initials
-    await expect(
-      page.locator('[data-testid="profile-trigger"] [data-testid="user-avatar-img"]'),
-    ).toBeVisible({ timeout: 10_000 })
+    // 4. the top-right header ball shows the uploaded photo, not initials —
+    // and the image actually LOADS (a broken/404 <img> is still 'visible', so
+    // assert naturalWidth > 0; this guards the presign→nginx→MinIO chain).
+    const ballImg = page.locator('[data-testid="profile-trigger"] [data-testid="user-avatar-img"]')
+    await expect(ballImg).toBeVisible({ timeout: 10_000 })
+    await expect
+      .poll(() => ballImg.evaluate((el) => el.naturalWidth), { timeout: 10_000 })
+      .toBeGreaterThan(0)
   })
 })
