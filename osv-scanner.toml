@@ -1,0 +1,8 @@
+# Scoped, documented ignores for the OSV lockfile gate (CI security job).
+[[IgnoredVulns]]
+id = "GHSA-mh99-v99m-4gvg"
+reason = """brace-expansion unbounded-expansion DoS, fixed only in 5.0.8
+with no 1.x/2.x backport; 5.x's named-export API breaks CJS consumers
+(minimatch@3 in the eslint chain). 5.x consumers are pinned to the
+patched 5.0.8; exposure is build/dev tooling only — brace-expansion is
+not in any shipped bundle. Revisit when upstream backports."""
