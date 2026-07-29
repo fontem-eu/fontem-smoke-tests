@@ -117,24 +117,30 @@ test.describe.serial('Production Smoke Tests', () => {
 
   // ── Authentication ─────────────────────────────────────────────
 
-  test('NAV-EXPLORE: top nav has Explore between Map and My Stories, hub links to Data Quality', async ({ page }) => {
-    // Batch-5 item 5: the user asked for an Explore top-level tab that
-    // groups the data-quality dashboards (and other browse-by-source
-    // surfaces) under one nav entry.
+  test('NAV-EXPLORE: the nav rail links to the Explore hub, which opens Data Quality', async ({ page }) => {
+    // Batch-5 item 5: the user asked for an Explore entry grouping the
+    // data-quality dashboards (and other browse-by-source surfaces)
+    // under one nav item.
+    //
+    // Rewritten for the nav rail. Two things moved and this test kept
+    // asserting the old shape: the entry is `nav-data-stats` (it was
+    // `nav-explore`), and Explore now leads the data group with Atlas
+    // directly after it, rather than trailing Map. The href is the
+    // stable contract, so pin that and the adjacency, not a global
+    // index into every nav item.
     await page.goto('/')
-    await demoMark(page, 'NAV-EXPLORE — verify the new top-level tab')
-    const explore = page.locator('[data-testid="nav-explore"]')
+    await demoMark(page, 'NAV-EXPLORE — verify the Explore entry')
+    const explore = page.locator('[data-testid="nav-data-stats"]')
     await expect(explore).toBeVisible({ timeout: 10_000 })
     await expect(explore).toHaveAttribute('href', '/explore')
-    // Order: Map → Explore → (My Stories if authed). Pin Explore's
-    // position relative to Map by index.
     const navHrefs = await page.locator('[data-testid^="nav-"]').evaluateAll(
       (els) => els.map((e) => e.getAttribute('href')),
     )
     const mapIdx = navHrefs.indexOf('/map')
     const explIdx = navHrefs.indexOf('/explore')
-    expect(explIdx).toBeGreaterThan(mapIdx)
-    await demoMark(page, 'Explore tab sits between Map and My Stories ✓', 2000)
+    expect(explIdx).toBeGreaterThanOrEqual(0)
+    expect(mapIdx).toBe(explIdx + 1)
+    await demoMark(page, 'Explore leads the data group, Atlas next ✓', 2000)
 
     // Click into the hub — the Data Quality card lands on /data-quality.
     await explore.click()
@@ -481,7 +487,15 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="contracts-panel"]').first())
       .toBeVisible({ timeout: 20_000 })
 
+    // Only contracts that carry a ted_notice_id get a detail link — most
+    // do not (data-backlog item 25, ~94% NULL). Where the environment's
+    // dataset has none for this entity there is nothing to click, so skip
+    // rather than fail: the same feature-detect idiom this suite already
+    // uses for "studio not deployed here". A silent pass would be worse
+    // than either.
     const titleLink = page.locator('[data-testid^="contract-title-link-"]').first()
+    const linkable = await titleLink.count()
+    test.skip(linkable === 0, 'no contract in this dataset has a ted_notice_id to link to')
     await titleLink.waitFor({ state: 'visible', timeout: 20_000 })
     const contractTitle = (await titleLink.textContent() || '').trim()
     expect(contractTitle.length).toBeGreaterThan(5)
