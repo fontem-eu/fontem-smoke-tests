@@ -117,24 +117,30 @@ test.describe.serial('Production Smoke Tests', () => {
 
   // ── Authentication ─────────────────────────────────────────────
 
-  test('NAV-EXPLORE: top nav has Explore between Map and My Stories, hub links to Data Quality', async ({ page }) => {
-    // Batch-5 item 5: the user asked for an Explore top-level tab that
-    // groups the data-quality dashboards (and other browse-by-source
-    // surfaces) under one nav entry.
+  test('NAV-EXPLORE: the nav rail links to the Explore hub, which opens Data Quality', async ({ page }) => {
+    // Batch-5 item 5: the user asked for an Explore entry grouping the
+    // data-quality dashboards (and other browse-by-source surfaces)
+    // under one nav item.
+    //
+    // Rewritten for the nav rail. Two things moved and this test kept
+    // asserting the old shape: the entry is `nav-data-stats` (it was
+    // `nav-explore`), and Explore now leads the data group with Atlas
+    // directly after it, rather than trailing Map. The href is the
+    // stable contract, so pin that and the adjacency, not a global
+    // index into every nav item.
     await page.goto('/')
-    await demoMark(page, 'NAV-EXPLORE — verify the new top-level tab')
-    const explore = page.locator('[data-testid="nav-explore"]')
+    await demoMark(page, 'NAV-EXPLORE — verify the Explore entry')
+    const explore = page.locator('[data-testid="nav-data-stats"]')
     await expect(explore).toBeVisible({ timeout: 10_000 })
     await expect(explore).toHaveAttribute('href', '/explore')
-    // Order: Map → Explore → (My Stories if authed). Pin Explore's
-    // position relative to Map by index.
     const navHrefs = await page.locator('[data-testid^="nav-"]').evaluateAll(
       (els) => els.map((e) => e.getAttribute('href')),
     )
     const mapIdx = navHrefs.indexOf('/map')
     const explIdx = navHrefs.indexOf('/explore')
-    expect(explIdx).toBeGreaterThan(mapIdx)
-    await demoMark(page, 'Explore tab sits between Map and My Stories ✓', 2000)
+    expect(explIdx).toBeGreaterThanOrEqual(0)
+    expect(mapIdx).toBe(explIdx + 1)
+    await demoMark(page, 'Explore leads the data group, Atlas next ✓', 2000)
 
     // Click into the hub — the Data Quality card lands on /data-quality.
     await explore.click()
