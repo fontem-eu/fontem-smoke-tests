@@ -487,7 +487,15 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="contracts-panel"]').first())
       .toBeVisible({ timeout: 20_000 })
 
+    // Only contracts that carry a ted_notice_id get a detail link — most
+    // do not (data-backlog item 25, ~94% NULL). Where the environment's
+    // dataset has none for this entity there is nothing to click, so skip
+    // rather than fail: the same feature-detect idiom this suite already
+    // uses for "studio not deployed here". A silent pass would be worse
+    // than either.
     const titleLink = page.locator('[data-testid^="contract-title-link-"]').first()
+    const linkable = await titleLink.count()
+    test.skip(linkable === 0, 'no contract in this dataset has a ted_notice_id to link to')
     await titleLink.waitFor({ state: 'visible', timeout: 20_000 })
     const contractTitle = (await titleLink.textContent() || '').trim()
     expect(contractTitle.length).toBeGreaterThan(5)
