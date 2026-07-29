@@ -86,15 +86,20 @@ jobs:
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
           sbom-path: ${{ steps.sbom.outputs.sbom-path }}
 
-  # The whole deploy is now just: sed the cronjob manifests, commit,
-  # push. ArgoCD apps in the gitops repo (fontem-smoke-tests-staging /
-  # fontem-smoke-tests-prod) watch `deployment/cronjob-staging.yaml` and
-  # `deployment/cronjob.yaml` here and pick up the bump automatically.
+  # Deploy = publish which image the promotion gate should run.
   #
-  # No kubectl needed — no PROMOTE_KUBECONFIG dependency.
-  # No gmr-ci `gitops-bump` action — no cross-repo coordination.
-  # No version-marker file in golden/gitops — ArgoCD's reconcile is
-  # the only signal.
+  # This used to sed deployment/cronjob-staging.yaml and cronjob.yaml,
+  # which no longer exist: e2e stopped being a scheduled CronJob and
+  # became a one-shot Job the gitops promote workflows render. The step
+  # was therefore editing files that were gone, so nothing got committed
+  # and gitops/testing/fontem-smoke-tests.yaml stayed frozen at
+  # v50518a5 — a tag the registry had already collected. The gate reads
+  # that marker, so every promotion failed its image preflight with
+  # "the testing pin is stale".
+  #
+  # The marker is the contract between this repo and the gate, so CI has
+  # to maintain it. Bumping it is also what triggers promote.yml, whose
+  # trigger is paths: ['testing/**'].
   deploy:
     needs: build-sign
     if: github.ref == 'refs/heads/main'
@@ -106,31 +111,40 @@ jobs:
         name: Compute image tag
         run: echo "value=v$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Bump cronjob image tags + commit + push
+      - name: Bump the gitops testing pin
         env:
           REG_USER: ${{ secrets.REGISTRY_USER }}
           REG_PASS: ${{ secrets.REGISTRY_PASSWORD }}
           TAG: ${{ steps.tag.outputs.value }}
         run: |
-          # Match fontem-smoke-tests:<anything-but-space> — guards against
-          # the tag format widening eating surrounding YAML.
-          sed -i "s|fontem-smoke-tests:[A-Za-z0-9.-]*|fontem-smoke-tests:$TAG|" \
-              deployment/cronjob-staging.yaml \
-              deployment/cronjob.yaml
+          set -euo pipefail
+          rm -rf /tmp/gitops
+          git clone --depth=1 \
+            "http://${REG_USER}:${REG_PASS}@gitea-http.dev-tools.svc.cluster.local:3000/fontem/gitops.git" \
+            /tmp/gitops
+          cd /tmp/gitops
+          F=testing/fontem-smoke-tests.yaml
+          # Anchor on the key: `version:` sits under a comment block in
+          # this file, so a line-number edit silently does nothing.
+          CUR=$(grep '^version:' "$F" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ "$CUR" = "$TAG" ]; then
+            echo "already at $TAG"
+            exit 0
+          fi
+          sed -i "s/^version: \".*\"/version: \"$TAG\"/" "$F"
+          echo "bumped $CUR -> $TAG"
           git config user.name "GMR CI"
           git config user.email "ci@void42.internal"
-          # actions/checkout writes an http.<base>.extraheader that
-          # authenticates as the per-task `gitea-actions` user, which
-          # is *not* in main's push-whitelist. Drop it so our explicit
-          # URL credentials (REGISTRY_USER=lucid) are what the server
-          # sees on push.
-          git config --local --unset-all \
-            "http.http://gitea-http.dev-tools.svc.cluster.local:3000/.extraheader" \
-            || true
-          git remote set-url origin "http://${REG_USER}:${REG_PASS}@gitea-http.dev-tools.svc.cluster.local:3000/fontem/fontem-smoke-tests.git"
-          if ! git diff --quiet; then
-            # [skip ci] is belt-and-braces; paths-ignore on the trigger
-            # is the primary loop guard.
-            git commit -am "ci: bump cronjobs to $TAG [skip ci]"
-            git push origin main
-          fi
+          git commit -am "ci: deploy fontem-smoke-tests $TAG to testing"
+          # Bounded fetch-rebase-push: other repos' CI pushes here too.
+          ATTEMPT=0
+          until git push origin main; do
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -ge 5 ]; then
+              echo "::error::push rejected after 5 attempts"
+              exit 1
+            fi
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort; echo "::error::rebase conflict in testing/"; exit 1; }
+            sleep $((ATTEMPT * 2))
+          done
