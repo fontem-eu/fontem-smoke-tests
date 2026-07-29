@@ -1,0 +1,77 @@
+---
+# One-shot e2e Job — the promotion gate.
+#
+# There is deliberately NO CronJob here. e2e does not run on a
+# schedule; it runs on demand, as a gate, and a failure blocks a
+# promotion:
+#
+#   testing e2e green  ->  allows testing -> staging + dast   (promote.yml)
+#   staging e2e green  ->  allows staging -> prod             (promote-prod.yml)
+#
+# e2e never runs against production. The previous CronJobs did the
+# opposite of all of this: `fontem-smoke-tests-prod` lived in the
+# fontem-staging namespace and pointed BASE_URL at https://www.fontem.eu,
+# on an 8-hourly schedule, while the gate that was supposed to consume
+# them had been hard-disabled in promote.yml. Both were suspended and
+# the staging one had never completed successfully, so the whole
+# arrangement gated nothing.
+#
+# Rendered by the gitops promote workflows by substituting exactly four
+# placeholders — E2E_NAMESPACE, E2E_ENV, E2E_BASE_URL, E2E_IMAGE_TAG —
+# with sed. Deliberately sed and not envsubst: gettext is not guaranteed
+# on the act_runner image, and a bare `envsubst` would additionally eat
+# any legitimate $VAR in the container spec.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: fontem-e2e-${E2E_ENV}-
+  namespace: ${E2E_NAMESPACE}
+  labels:
+    app: fontem-smoke-tests
+    environment: ${E2E_ENV}
+    role: promotion-gate
+spec:
+  # No pod-level retry. Playwright already retries once internally
+  # (playwright.config.js `retries: 1`); retrying the whole pod on top
+  # of that doubles the gate's wall-clock and lets a genuine failure
+  # hide behind a lucky second run. One pod, one verdict.
+  backoffLimit: 0
+  # The suite is ~73 tests at workers:1. It normally finishes in
+  # minutes; this ceiling is sized for a bad day (cluster CPU pressure,
+  # the LLM-streaming ASSIST tests) rather than the median, so a slow
+  # run fails as "slow" rather than being killed mid-flight and
+  # reported as a broken gate.
+  activeDeadlineSeconds: 1800
+  # Let finished Jobs clean themselves up; the workflow collects logs
+  # before this fires, and nothing should accumulate in the namespace.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: fontem-smoke-tests
+        environment: ${E2E_ENV}
+        role: promotion-gate
+      annotations:
+        linkerd.io/inject: disabled
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: e2e
+          image: contribute.void42.internal/fontem/fontem-smoke-tests:${E2E_IMAGE_TAG}
+          # No shell wrapper: the gate reports through the workflow, so
+          # the container only has to run the suite and exit non-zero on
+          # failure. (The old CronJob wrapped this in a script purely to
+          # push an Uptime-Kuma heartbeat, which a gate does not need.)
+          command: ["npx", "playwright", "test", "--project=chromium"]
+          env:
+            - name: BASE_URL
+              value: "${E2E_BASE_URL}"
+            - name: TEST_EMAIL
+              valueFrom: { secretKeyRef: { name: gmr-smoke-creds, key: email } }
+            - name: TEST_PASSWORD
+              valueFrom: { secretKeyRef: { name: gmr-smoke-creds, key: password } }
+          resources:
+            requests: { memory: "512Mi", cpu: "250m" }
+            limits: { memory: "1Gi", cpu: "1000m" }

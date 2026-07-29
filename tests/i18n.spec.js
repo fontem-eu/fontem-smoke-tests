@@ -12,7 +12,7 @@
  * i18n', …)` wiring, and the per-route document.title swap on locale
  * change.
  *
- * Run: BASE_URL=https://gmr.void42.net npx playwright test i18n.spec.js
+ * Run: BASE_URL=https://fontem.testing.void42.internal npx playwright test i18n.spec.js
  */
 import { test, expect } from '@playwright/test'
 

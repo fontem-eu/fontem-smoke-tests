@@ -8,7 +8,8 @@
 import { test, expect, request } from '@playwright/test'
 
 // Goes through the gmr-web nginx proxy: /api/consolidator/* → consolidator svc
-const BASE = process.env.BASE_URL || 'https://gmr.void42.net'
+// Testing by default — e2e is a promotion gate and never targets prod.
+const BASE = process.env.BASE_URL || 'https://fontem.testing.void42.internal'
 
 test.describe('Consolidator — read-only smoke', () => {
   test('CON-01: /health returns ok', async () => {
