@@ -456,19 +456,31 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="contracts-panel"]').first())
       .toBeVisible({ timeout: 20_000 })
 
-    const tableLink = page.locator('[data-testid^="contract-title-link-"]').first()
-    await tableLink.waitFor({ state: 'visible', timeout: 20_000 })
-    // The title link is an in-app route to our detail page.
-    const href = await tableLink.getAttribute('href')
-    expect(href).toMatch(/^\/contract\/.+/)
+    // Rows only carry a title link when the contract has a ted_notice_id;
+    // most do not (data-backlog item 25, ~94% NULL) and fontem-web now
+    // renders those titles as plain text rather than linking them to
+    // `/contract/null`, which is a dead page. So the invariant is not
+    // "every row is a link" but "no row escapes to TED, and any link
+    // there is goes to our detail page".
+    const linkable = await page.locator('[data-testid^="contract-title-link-"]').count()
+    if (linkable > 0) {
+      const tableLink = page.locator('[data-testid^="contract-title-link-"]').first()
+      await tableLink.waitFor({ state: 'visible', timeout: 20_000 })
+      const href = await tableLink.getAttribute('href')
+      expect(href).toMatch(/^\/contract\/.+/)
+      expect(href).not.toContain('/contract/null')
+    }
     // No row links straight out to TED or the redirector any more.
     expect(await page.locator('[data-testid^="contract-ted-link-"]').count()).toBe(0)
     expect(await page.locator('a[href*="ted.europa.eu"]').count()).toBe(0)
-    // Every visible row carries the in-app title link.
-    const linkCount = await page.locator('[data-testid^="contract-title-link-"]').count()
+    // Every row is accounted for: linked when it has a notice id, plain
+    // text when it does not. The count that must hold is linked+unlinked
+    // == rows, which is what catches a row silently vanishing (all the
+    // unlinked rows used to share the Vue :key `null`).
     const rowCount = await page.locator('[data-testid^="contract-row-"]').count()
-    expect(linkCount).toBeGreaterThan(0)
-    expect(linkCount).toBe(rowCount)
+    const unlinked = await page.locator('[data-testid="contract-title-unlinked"]').count()
+    expect(rowCount).toBeGreaterThan(0)
+    expect(linkable + unlinked).toBe(rowCount)
   })
 
   test('PROC-CONTRACT-DETAIL: a contract opens our detail page, which links out to the right TED notice', async ({ page, context }) => {
