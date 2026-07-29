@@ -9,7 +9,7 @@
  *   - staging: same CronJob spec but suspended; invoked on demand by
  *     the gitops promote workflow as a pre-prod gate
  *
- * Run: BASE_URL=https://gmr.void42.net npx playwright test
+ * Run: BASE_URL=https://fontem.testing.void42.internal npx playwright test
  */
 import { test, expect } from './baseTest.js'
 import fs from 'node:fs/promises'

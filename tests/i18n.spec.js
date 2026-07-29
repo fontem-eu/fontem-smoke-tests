@@ -12,16 +12,23 @@
  * i18n', …)` wiring, and the per-route document.title swap on locale
  * change.
  *
- * Run: BASE_URL=https://gmr.void42.net npx playwright test i18n.spec.js
+ * Run: BASE_URL=https://fontem.testing.void42.internal npx playwright test i18n.spec.js
  */
 import { test, expect } from '@playwright/test'
 
 // Three locales, each with one label the user actually sees on the
 // landing page. Pinned against src/locales/<code>.json in fontem-web.
+//
+// `titleContains` is the localised tagline: the home <title> became
+// "Fontem — <tagline>" when the tagline shipped, so the old expectation
+// (the feed heading) no longer appears in the title at all. The tagline
+// is translated per locale, so this still fails on a missing
+// translation rather than silently passing on an English fallback —
+// which is the whole point of asserting it per locale.
 const LOCALES = [
   {
     code: 'de',
-    titleContains: 'Öffentliche Datengeschichten',
+    titleContains: 'Die digitalen Grenzen der EU überwinden',
     feedSubContains: 'Öffentliche Datengeschichten der Community',
     pluralZero: 'keine Aufträge',
     pluralOne: '1 Auftrag',
@@ -29,7 +36,7 @@ const LOCALES = [
   },
   {
     code: 'fr',
-    titleContains: 'Histoires de données publiques',
+    titleContains: "Franchir les frontières numériques de l'UE",
     feedSubContains: 'Histoires de données publiques',
     pluralZero: 'aucun marché',
     pluralOne: '1 marché',
@@ -37,7 +44,7 @@ const LOCALES = [
   },
   {
     code: 'pt',
-    titleContains: 'Histórias com dados públicas',
+    titleContains: 'A atravessar as fronteiras digitais da UE',
     feedSubContains: 'Histórias com dados públicas',
     pluralZero: 'sem contratos',
     pluralOne: '1 contrato',

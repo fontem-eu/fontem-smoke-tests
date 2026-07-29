@@ -1,6 +1,11 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const BASE_URL = process.env.BASE_URL || 'https://gmr.void42.net'
+// Default to TESTING, never production. e2e is a promotion gate: it
+// runs against testing (before staging) and against staging (before
+// prod), and is not run against prod at all. The old default was the
+// prod host, so a bare `npx playwright test` — the command the README
+// documented — drove a logging-in suite straight at the live site.
+const BASE_URL = process.env.BASE_URL || 'https://fontem.testing.void42.internal'
 
 export default defineConfig({
   testDir: './tests',
