@@ -851,20 +851,17 @@ test.describe.serial('Production Smoke Tests', () => {
     ).toBeGreaterThan(0)
     await demoMark(page, `Pixel scan: ${colorized.saturated} colored pixels, ${colorized.nullGray} null-gray ✓`, 2500)
 
-    // Bundle-text check: the tooltip wording change shipped.
-    const html = await page.content()
-    // Vite content-hashes can contain _ and - (and may start with
-    // either), e.g. /assets/index-_O7F8ZLD.js — match the full base64url
-    // alphabet, not just [A-Za-z0-9], or this silently finds no bundle.
-    const m = html.match(/\/assets\/index-[A-Za-z0-9_-]+\.js/)
-    expect(m).not.toBeNull()
-    const bundleUrl = new URL(m[0], page.url()).toString()
-    const bundle = await page.evaluate(async (u) => {
-      const r = await fetch(u); return r.text()
-    }, bundleUrl)
-    expect(bundle).toContain('no known contracts')
-    expect(bundle).not.toMatch(/"no data"/)
-    await demoMark(page, 'Bundle: "no known contracts" present, "no data" gone ✓', 2000)
+    // The tooltip-wording half of this test used to grep the main
+    // index bundle for "no known contracts". That can no longer work:
+    // the build splits the 24 locales into lazily-loaded chunks, so the
+    // string is not in any asset the initial HTML references and the
+    // grep matched a chunk preamble instead (it was asserting against
+    // __vite__mapDeps). Dropped rather than replaced with a fragile
+    // WebGL hover: the wording is pinned where it belongs, on the
+    // rendered tooltip, by fontem-web tests/unit/EntityNutsMap.test.js
+    // ("tooltip reads \"no known contracts\" (not \"no data\")"). What
+    // this e2e uniquely proves — that the choropleth actually paints —
+    // is the legend + saturated-pixel scan above.
   })
 
   test('PROFILE-NO-UUID: financials view does not render the raw gmr_id UUID', async ({ page }) => {
