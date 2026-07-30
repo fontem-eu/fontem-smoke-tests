@@ -123,11 +123,49 @@ PLAYWRIGHT_PROXY="http://${ZAP_SERVICE}" \
     npx playwright test --project=chromium \
     --grep-invert "ASSIST" 2>&1 | tail -5 || true
 
-# Wait for passive scan to process all recorded traffic
+# Wait for passive scan to process all recorded traffic.
+#
+# Bounded, and tolerant of a bad response — this loop used to be
+# `while true` with an unguarded JSON parse, which gave it two ways to
+# ruin a 30-minute run:
+#
+#   1. A queue that stops draining hangs the scan forever. ZAP can leave
+#      a handful of records it will not finish (observed: pinned at 14
+#      with the message count frozen), and there is no reason to block
+#      the active scan on them.
+#   2. One empty or non-JSON reply from a busy ZAP killed the whole
+#      script. `curl -sf | python3 -c json.load` under `set -euo
+#      pipefail` raises JSONDecodeError and the EXIT trap then deletes
+#      the ZAP job, discarding every request captured so far. Phase 4
+#      already guards its poll this way; this one did not.
+#
+# Also stops early once the queue stalls: if the count has not moved for
+# PSCAN_STALL_LIMIT consecutive polls we have what we are going to get.
 log "Waiting for passive scan to complete..."
+PSCAN_START=$(date +%s)
+PSCAN_TIMEOUT=600      # 10 minutes is far longer than a healthy drain
+PSCAN_STALL_LIMIT=12   # 12 x 5s = 60s of no progress
+LAST_RECORDS=""
+STALLED=0
 while true; do
-    RECORDS=$(curl -sf "http://${ZAP_SERVICE}/JSON/pscan/view/recordsToScan/" | python3 -c "import json,sys;print(json.load(sys.stdin)['recordsToScan'])")
+    ELAPSED=$(( $(date +%s) - PSCAN_START ))
+    if [ "$ELAPSED" -gt "$PSCAN_TIMEOUT" ]; then
+        log "Passive scan still has ${RECORDS:-?} records after ${PSCAN_TIMEOUT}s — proceeding"
+        break
+    fi
+    RAW=$(curl -s --max-time 10 "http://${ZAP_SERVICE}/JSON/pscan/view/recordsToScan/" || echo '{}')
+    RECORDS=$(echo "$RAW" | python3 -c "import json,sys;print(json.load(sys.stdin).get('recordsToScan','?'))" 2>/dev/null || echo "?")
     [ "$RECORDS" = "0" ] && break
+    if [ "$RECORDS" = "$LAST_RECORDS" ]; then
+        STALLED=$(( STALLED + 1 ))
+        if [ "$STALLED" -ge "$PSCAN_STALL_LIMIT" ]; then
+            log "Passive scan stalled at ${RECORDS} records — proceeding"
+            break
+        fi
+    else
+        STALLED=0
+    fi
+    LAST_RECORDS="$RECORDS"
     log "Passive scan: $RECORDS records remaining"
     sleep 5
 done
