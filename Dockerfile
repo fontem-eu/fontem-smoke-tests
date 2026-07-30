@@ -15,11 +15,20 @@ RUN npm ci
 COPY playwright.config.js eslint.config.js global-setup.js ./
 COPY tests/ tests/
 COPY docs/ docs/
+# Upload fixtures. Missing here meant STORY-UPLOAD-SEC-* passed on a
+# developer checkout and failed only inside the image, where
+# fs.readFile(fixtures/uploads/...) has nothing to read — which is
+# exactly the run that gates promotion.
+COPY fixtures/ fixtures/
 
 # Chromium is already present in the base image — matches the pinned
 # @playwright/test version so no runtime download is attempted.
 
-# Default target
-ENV BASE_URL=https://gmr.void42.net
+# Default target: TESTING, never production. e2e is a promotion gate —
+# it runs against testing before staging and against staging before
+# prod, and is not pointed at the live site. The promote workflows set
+# BASE_URL explicitly; this default only matters if someone runs the
+# image by hand.
+ENV BASE_URL=https://fontem.testing.void42.internal
 
 CMD ["npx", "playwright", "test", "--project=chromium"]
