@@ -27,10 +27,14 @@ COPY fixtures/ fixtures/
 # kubectl + pyyaml for the scheduled DAST scan: the scan publishes its
 # verdict into a ConfigMap that the prod-release gate reads, and the
 # parser applies dast-ignore.yaml. Pinned to the cluster's minor version.
+# python3-yaml from apt, not pip: this base image ships python3 with no
+# pip at all, so `pip install pyyaml` fails and so does the `|| pip`
+# fallback — both halves of it were the same missing binary.
 RUN curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl \
     && chmod +x /usr/local/bin/kubectl \
-    && (pip install --no-cache-dir --break-system-packages pyyaml 2>/dev/null \
-        || pip install --no-cache-dir pyyaml)
+    && apt-get update \
+    && apt-get install -y --no-install-recommends python3-yaml \
+    && rm -rf /var/lib/apt/lists/*
 
 # Chromium is already present in the base image — matches the pinned
 # @playwright/test version so no runtime download is attempted.
