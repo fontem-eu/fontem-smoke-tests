@@ -1,0 +1,54 @@
+# DAST false-positive ignore list.
+#
+# Entries here are excluded from the gate verdict. They are NOT hidden:
+# parse-report.py still counts them and prints them under "ignored", so a
+# suppression can never quietly become a blind spot.
+#
+# Rules for adding an entry:
+#   * Record WHY, with the evidence that disproved it. "Looks like a false
+#     positive" is not a reason; a measurement is.
+#   * Scope it as narrowly as you can. `alert` + `param` beats `alert`
+#     alone, because a real finding on a different parameter should still
+#     break the build.
+#   * Date it. A suppression that has outlived the code it was written
+#     for is worse than no suppression.
+#
+# Fields (all optional except `alert`; all listed fields must match):
+#   alert       exact ZAP alert name
+#   param       exact parameter name
+#   url_regex   regex matched against the alert URL
+#   method      HTTP method
+#   reason      free text — required by convention, enforced by the parser
+#   added       ISO date
+#   evidence    what proved it false
+
+ignore:
+  - alert: SQL Injection
+    reason: >-
+      Boolean-condition heuristic firing on endpoints that ignore the
+      injected parameter. Disproved empirically on both affected
+      surfaces, 2026-07-30.
+    evidence: >-
+      /capi/data-stories/<id>?lang=<payload> returns byte-identical
+      responses (same md5, same length, HTTP 200) for `en`,
+      `en' AND '1'='1' --`, `en' AND '1'='2' --` and a bare `en'`. A bare
+      single quote would break any SQL string; it does not, so `lang`
+      never reaches SQL. On /capi/studio/projects/<id>/plots the `spec`
+      is stored as JSONB: `bivariate=none' OR pg_sleep(5) --` returned in
+      62ms against a 63ms baseline, i.e. no SQL executed. ZAP's differ is
+      additionally confused because that endpoint returns a fresh UUID on
+      every call, so "true" and "false" responses always differ.
+    added: 2026-07-30
+
+  - alert: Path Traversal
+    reason: >-
+      ZAP injects the URL's own path segments as the parameter value and
+      concludes traversal when the response is unchanged — which it is,
+      because the parameter is ignored. Disproved 2026-07-30.
+    evidence: >-
+      All 9 instances have empty `evidence` and Low confidence, and the
+      "attack" strings are fragments of the request's own path:
+      `\content`, `/investigations`, `/members`, `\plots`,
+      `visualizations`, and in one case the story UUID itself. Same
+      ignored-parameter artefact as the SQL Injection entry above.
+    added: 2026-07-30
