@@ -133,6 +133,18 @@ jobs:
           fi
           sed -i "s/^version: \".*\"/version: \"$TAG\"/" "$F"
           echo "bumped $CUR -> $TAG"
+
+          # The scheduled DAST CronJob runs this same image, from
+          # infra/dast.yaml. It is not a `version:` pin — it is a real
+          # image reference inside a manifest — so it needs its own
+          # substitution, anchored on the image name.
+          D=infra/dast.yaml
+          sed -i "s|\(fontem/fontem-smoke-tests:\)v[0-9a-f]\{7,\}|\1$TAG|" "$D"
+          if git diff --quiet -- "$D"; then
+            echo "dast scan image already at $TAG"
+          else
+            echo "bumped the dast scan image -> $TAG"
+          fi
           git config user.name "GMR CI"
           git config user.email "ci@void42.internal"
           git commit -am "ci: deploy fontem-smoke-tests $TAG to testing"
