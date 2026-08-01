@@ -29,6 +29,11 @@ CM="${STATUS_CONFIGMAP:-dast-latest-report}"
 WORK="${WORK_DIR:-/work}"
 ASCAN_TIMEOUT="${ASCAN_TIMEOUT:-1800}"
 PSCAN_TIMEOUT="${PSCAN_TIMEOUT:-600}"
+# Traffic floor. The 2026-07-31 authenticated run produced 8,500+
+# messages; the unauthenticated June run produced 151 and looked clean.
+# 1500 sits well above "the suite barely started" and well below a
+# healthy run, so it catches starvation without being brittle.
+MIN_MESSAGES="${MIN_MESSAGES:-1500}"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 
@@ -60,8 +65,28 @@ done
 log "Running smoke suite through the ZAP proxy (passive scan)"
 # `|| true` on purpose: a failing assertion still generated the traffic
 # we are here to scan. Test health is the e2e gate's job, not this one's.
+#
+# The whole output is kept, not tail -5. When the suite dies early the
+# scan is starved of traffic, and the reason is in the lines tail -5
+# throws away — the first run in-cluster reported "72 did not run" and
+# there was nothing left in the log to say why.
 BASE_URL="$TARGET" PLAYWRIGHT_PROXY="$ZAP" \
-    npx playwright test --project=chromium --grep-invert "ASSIST" 2>&1 | tail -5 || true
+    npx playwright test --project=chromium --grep-invert "ASSIST" \
+    > "$WORK/playwright.log" 2>&1 || true
+tail -40 "$WORK/playwright.log" || true
+
+# A scan is only as good as the traffic it saw. ZAP finding nothing
+# because the suite never exercised the app is not a clean bill of
+# health, and it must not be allowed to read as one.
+MSGS=$(curl -s --max-time 10 "$ZAP/JSON/core/view/numberOfMessages/" \
+       | python3 -c "import json,sys;print(json.load(sys.stdin).get('numberOfMessages','0'))" 2>/dev/null || echo 0)
+log "ZAP saw $MSGS messages (floor: $MIN_MESSAGES)"
+if [ "$MSGS" -lt "$MIN_MESSAGES" ]; then
+    log "::error:: only $MSGS messages — the suite did not exercise the app"
+    log "Last 40 lines of the suite output are above. Not publishing a verdict:"
+    log "a PASS from a starved scan is worse than no scan at all."
+    exit 1
+fi
 
 # ── Passive drain (bounded + stall-aware, same as run-dast-scan.sh) ──
 log "Draining the passive scan queue"
@@ -79,8 +104,18 @@ done
 
 # ── Active scan ─────────────────────────────────────────────
 log "Active scan against $TARGET_CAPI"
-SID=$(curl -sf --max-time 30 "$ZAP/JSON/ascan/action/scan/?url=${TARGET_CAPI}&recurse=true&inScopeOnly=false" \
-      | python3 -c "import json,sys;print(json.load(sys.stdin)['scan'])")
+# curl -sf yields an EMPTY body on an HTTP error, so an unguarded
+# json.load here dies with a decoder traceback that says nothing about
+# what ZAP actually objected to. It failed exactly this way on the first
+# in-cluster run — "url_not_found: URL Not Found in the Scan Tree",
+# invisible behind a JSONDecodeError.
+ASCAN_RAW=$(curl -s --max-time 30 "$ZAP/JSON/ascan/action/scan/?url=${TARGET_CAPI}&recurse=true&inScopeOnly=false" || echo '')
+SID=$(echo "$ASCAN_RAW" | python3 -c "import json,sys;print(json.load(sys.stdin)['scan'])" 2>/dev/null || echo '')
+if [ -z "$SID" ]; then
+    log "::error:: ZAP refused to start the active scan against $TARGET_CAPI"
+    log "ZAP said: ${ASCAN_RAW:-<empty response>}"
+    exit 1
+fi
 START=$(date +%s)
 while true; do
     [ $(( $(date +%s) - START )) -gt "$ASCAN_TIMEOUT" ] && { log "active scan timeout — partial results"; break; }
