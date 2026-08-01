@@ -68,6 +68,17 @@ def _load_ignores(path: Path | None) -> list[dict]:
             # Enforced deliberately: an unexplained suppression is a
             # future mystery, and someone will assume it was justified.
             raise ValueError(f"{path}: rule for {r['alert']!r} has no `reason`")
+        if not isinstance(r.get("max_instances"), int) or r["max_instances"] < 1:
+            # Blast radius. A rule with only `alert:` suppresses that alert
+            # EVERYWHERE, forever — which is how an escape hatch quietly
+            # becomes a hole in the gate. The 2026-07-31 triage covered 21
+            # SQL Injection / Path Traversal instances; by 2026-08-01 the
+            # same two rules were swallowing 130, none of the extra ones
+            # looked at by anybody.
+            raise ValueError(
+                f"{path}: rule for {r['alert']!r} has no `max_instances`. "
+                "Cap what a suppression may hide, so growth forces re-triage."
+            )
     return rules
 
 
@@ -99,9 +110,20 @@ def _key(a: dict) -> tuple:
 
 def summarise(alerts: list[dict], ignores: list[dict]) -> dict:
     kept, ignored = [], []
+    # Per-rule tallies, so a suppression that has quietly grown beyond what
+    # was actually triaged can be caught rather than trusted.
+    hits = collections.Counter()
     for a in alerts:
-        rule = next((r for r in ignores if _matches(a, r)), None)
+        idx, rule = next(((i, r) for i, r in enumerate(ignores) if _matches(a, r)), (None, None))
+        if rule is not None:
+            hits[idx] += 1
         (ignored if rule else kept).append(a)
+
+    overgrown = [
+        {"alert": ignores[i]["alert"], "seen": n, "max": ignores[i]["max_instances"]}
+        for i, n in hits.items()
+        if n > ignores[i]["max_instances"]
+    ]
 
     def by_level(items):
         c = collections.Counter(a.get("risk", "?") for a in items)
@@ -117,6 +139,7 @@ def summarise(alerts: list[dict], ignores: list[dict]) -> dict:
         "counted": by_level(kept),
         "ignored": by_level(ignored),
         "ignored_types": dict(collections.Counter(a.get("alert", "?") for a in ignored)),
+        "overgrown": overgrown,
         "types": {lvl: dict(c) for lvl, c in types.items()},
         "keys": sorted({"|".join(_key(a)) for a in kept}),
     }
@@ -130,6 +153,15 @@ def diff(cur: dict, prev: dict | None) -> dict:
 
 
 def verdict(summary: dict, d: dict) -> tuple[bool, str]:
+    # A suppression that has outgrown its triage fails the gate BEFORE the
+    # High count is even consulted. Otherwise the escape hatch decides the
+    # verdict: "no High findings" is meaningless if the reason is that a
+    # rule silently absorbed six times what anyone actually looked at.
+    if summary.get("overgrown"):
+        parts = ", ".join(f"{o['alert']} {o['seen']}>{o['max']}" for o in summary["overgrown"])
+        return False, (f"ignore rules now suppress more than they were triaged for ({parts}) "
+                       "— re-triage and raise max_instances, or scope the rule")
+
     high = summary["counted"]["High"]
     if high == 0:
         return True, "no High findings outside the ignore list"
