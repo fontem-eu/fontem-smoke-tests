@@ -120,6 +120,18 @@ START=$(date +%s)
 while true; do
     [ $(( $(date +%s) - START )) -gt "$ASCAN_TIMEOUT" ] && { log "active scan timeout — partial results"; break; }
     RAW=$(curl -s --max-time 10 "$ZAP/JSON/ascan/view/status/?scanId=${SID}" || echo '{}')
+    # A scan that VANISHES is not a scan at 0%. If ZAP restarts, the scan
+    # is gone and this endpoint answers {"code":"does_not_exist"} — which
+    # has no 'status' key, so a .get('status','0') default reported "0%"
+    # forever. That is what it did: 5 minutes of "active scan 0%" after an
+    # OOM, on course to hit the 30-minute timeout and then publish a
+    # verdict from a scan that had died. Fail instead.
+    if echo "$RAW" | grep -q 'does_not_exist'; then
+        log "::error:: active scan $SID disappeared — ZAP restarted mid-scan"
+        log "Check: kubectl -n $NS describe pod -l app=zap | grep -i oom"
+        log "Not publishing a verdict from a scan that did not finish."
+        exit 1
+    fi
     S=$(echo "$RAW" | python3 -c "import json,sys;print(json.load(sys.stdin).get('status','0'))" 2>/dev/null || echo "0")
     [ "$S" = "100" ] && break
     log "active scan ${S}%"
