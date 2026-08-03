@@ -18,9 +18,16 @@
 #   param       exact parameter name
 #   url_regex   regex matched against the alert URL
 #   method      HTTP method
-#   reason      free text — required by convention, enforced by the parser
-#   added       ISO date
-#   evidence    what proved it false
+#   reason        free text — REQUIRED, enforced by the parser
+#   max_instances REQUIRED — the most this rule may suppress before the
+#                 gate FAILS and demands re-triage. Without a ceiling a
+#                 rule written for a handful of findings quietly absorbs
+#                 hundreds: these two were triaged over 21 instances on
+#                 2026-07-30 and were suppressing 130 by 2026-08-01, none
+#                 of the extra ones looked at by anybody. An escape hatch
+#                 with no cap is just a hole in the gate.
+#   added         ISO date
+#   evidence      what proved it false
 
 ignore:
   - alert: SQL Injection
@@ -39,6 +46,14 @@ ignore:
       additionally confused because that endpoint returns a fresh UUID on
       every call, so "true" and "false" responses always differ.
     added: 2026-07-30
+    # Scoped to the community API — the only surface where the mechanism
+    # above was demonstrated. SQL Injection reported against any other host
+    # or path is NOT covered and will fail the gate.
+    url_regex: "/capi/"
+    # 93 instances on the 2026-08-01 in-cluster run, stable run to run.
+    # The headroom is for which endpoints a given suite run happens to
+    # exercise, not for a new class of finding.
+    max_instances: 110
 
   - alert: Path Traversal
     reason: >-
@@ -52,3 +67,6 @@ ignore:
       `visualizations`, and in one case the story UUID itself. Same
       ignored-parameter artefact as the SQL Injection entry above.
     added: 2026-07-30
+    url_regex: "/capi/"
+    # 37 instances on the 2026-08-01 in-cluster run.
+    max_instances: 45
