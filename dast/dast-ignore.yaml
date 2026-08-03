@@ -70,3 +70,51 @@ ignore:
     url_regex: "/capi/"
     # 37 instances on the 2026-08-01 in-cluster run.
     max_instances: 45
+
+  - alert: Cross Site Scripting Weakness (Persistent in JSON Response)
+    url_regex: "/capi/"
+    reason: >-
+      Values are persisted and echoed back in JSON listings, which is what
+      the rule detects, but there is no context in which they execute.
+      Three independent controls, verified 2026-08-03.
+    evidence: >-
+      (1) Responses are served as `application/json` with
+      `x-content-type-options: nosniff`, so navigating to the API URL
+      cannot execute them — confirmed against /capi/investigations,
+      /capi/studio/projects and /capi/activity, all HTTP 200,
+      content-type application/json, nosniff present.
+      (2) Every flagged field renders through Vue text interpolation
+      `{{ }}`, which HTML-escapes: project.name (StudioPlotView,
+      StudioHomeView), user.name / user.email (ActivityView), q.name /
+      s.name / i.name (StudioPlotView). None is bound with v-html.
+      (3) The only v-html sites in the app are DOMPurify-sanitised
+      (renderMarkdown -> sanitizeMarkdown, sanitizeHtml, with script /
+      iframe / object / on* attributes in FORBID lists) or static SVG
+      literals hardcoded in AboutView. Defence in depth: CSP is
+      `script-src 'self'` with no unsafe-inline.
+      Note the query parameter itself is a filter, not an echo: a
+      <script> payload in ?name= produced zero occurrences in the
+      response body.
+    added: 2026-08-03
+    # 9 instances on the 2026-08-01 run, across 5 endpoints.
+    max_instances: 15
+
+  - alert: Format String Error
+    url_regex: "/capi/auth/login"
+    reason: >-
+      ZAP infers a format-string flaw from a response that differs from
+      baseline. The difference is the account lockout, which is driven by
+      attempt count, not by payload content. Disproved 2026-08-03.
+    evidence: >-
+      Sent from a clean rate-limit state against fresh non-existent
+      accounts, so no lockout counter was involved, `%s%s%s%s%s` and
+      `%n%n%n%n` each returned HTTP 401
+      {"detail":"Invalid email or password"} — byte-identical to a benign
+      wrong password sent immediately before and after. No error leak, no
+      stack trace, no timing difference. Sending the same payloads rapidly
+      against a real account instead returns HTTP 429 "Account temporarily
+      locked", which is the response change ZAP measured: it is the rate
+      limiter working, not a parsed format string.
+    added: 2026-08-03
+    max_instances: 3
+

@@ -96,6 +96,13 @@ def _matches(alert: dict, rule: dict) -> bool:
     return True
 
 
+# Bump whenever _key() changes shape. A previous report written under a
+# different version cannot be diffed against — every key would look new
+# and the gate would block on the entire report for a reason that is not a
+# security finding. Changing this re-baselines once, deliberately, instead.
+KEY_VERSION = 2
+
+
 def _key(a: dict) -> tuple:
     """Identity of a finding for diffing.
 
@@ -150,6 +157,7 @@ def summarise(alerts: list[dict], ignores: list[dict]) -> dict:
         "ignored_types": dict(collections.Counter(a.get("alert", "?") for a in ignored)),
         "overgrown": overgrown,
         "types": {lvl: dict(c) for lvl, c in types.items()},
+        "key_version": KEY_VERSION,
         "keys": sorted({"|".join(_key(a)) for a in kept}),
     }
 
@@ -157,6 +165,14 @@ def summarise(alerts: list[dict], ignores: list[dict]) -> dict:
 def diff(cur: dict, prev: dict | None) -> dict:
     if not prev:
         return {"baseline": True, "new": [], "gone": []}
+    # A report written before the key format changed is not comparable.
+    # Treat it as no baseline rather than reporting every finding as new.
+    if prev.get("key_version") != cur.get("key_version"):
+        return {"baseline": True, "new": [], "gone": [],
+                "rebaselined": (f"previous report used key_version "
+                                f"{prev.get('key_version', 1)}, this one uses "
+                                f"{cur.get('key_version')} — re-baselined, "
+                                f"next run diffs normally")}
     c, p = set(cur["keys"]), set(prev.get("keys", []))
     return {"baseline": False, "new": sorted(c - p), "gone": sorted(p - c)}
 
@@ -190,9 +206,10 @@ def verdict(summary: dict, d: dict) -> tuple[bool, str]:
     new_blocking = [k for k in d["new"] if k.split("|")[0] in blocking_alerts]
 
     if d["baseline"]:
+        why_base = d.get("rebaselined") or "no previous report to compare against"
         if high:
-            return False, f"{high} High finding(s) — no previous report to compare against"
-        return True, "no High findings outside the ignore list (baseline run, nothing to diff)"
+            return False, f"{high} High finding(s) — {why_base}"
+        return True, f"no High findings outside the ignore list ({why_base})"
 
     if high and new_blocking:
         return False, (f"{high} High finding(s) and {len(new_blocking)} new finding(s) "
