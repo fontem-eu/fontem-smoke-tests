@@ -81,12 +81,25 @@ test.describe('Article translations', () => {
     const bump = await api(request, tok, 'PUT', `/data-stories/${sid}/content`, doc(EN_BODY_V2))
     expect(bump.status).toBe(200)
 
+    // A reader whose UI language is the stale one must NOT be silently served
+    // it. This is the regression the policy change exists for: before, the
+    // story auto-opened in pt and rendered drifted text under a small badge.
+    await page.addInitScript(() => localStorage.setItem('gmr-lang', 'pt'))
+    await page.goto(`/stories/${sid}`)
+    await expect(page.locator('[data-testid="story-body"]')).toContainText(EN_BODY_V2, { timeout: 20_000 })
+    await expect(page.locator('[data-testid="translation-picker"]')).toHaveValue('')
+    await expect(page.locator('[data-testid="stale-translation-notice"]')).toHaveCount(0)
+    await page.addInitScript(() => localStorage.removeItem('gmr-lang'))
+
     await page.goto(`/stories/${sid}`)
     await expect(page.locator('[data-testid="translation-bar"]')).toBeVisible({ timeout: 20_000 })
     await page.selectOption('[data-testid="translation-picker"]', 'pt')
-    // translated text still renders…
-    await expect(page.locator('[data-testid="story-body"]')).toContainText(PT_BODY, { timeout: 15_000 })
-    // …under the yellow potentially-outdated label
+    // Picking it explicitly shows the ORIGINAL text plus a notice saying why —
+    // a stale translation is never rendered.
+    await expect(page.locator('[data-testid="stale-translation-notice"]')).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('[data-testid="story-body"]')).toContainText(EN_BODY_V2)
+    await expect(page.locator('[data-testid="story-body"]')).not.toContainText(PT_BODY)
+    // the picker keeps the chosen language, and still flags it
     await expect(page.locator('[data-testid="translation-outdated-badge"]')).toBeVisible()
 
     // ── editor: the translation carries the flag; resolving clears it ──
