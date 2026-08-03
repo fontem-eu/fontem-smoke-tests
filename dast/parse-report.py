@@ -34,6 +34,7 @@ import argparse
 import collections
 import json
 import re
+from urllib.parse import unquote
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,8 +104,16 @@ def _key(a: dict) -> tuple:
     method + the URL's path shape is stable across runs while still
     separating genuinely different findings.
     """
-    path = re.sub(r"/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "/{id}",
-                  (a.get("url", "").split("?")[0]))
+    path = a.get("url", "").split("?")[0]
+    # Percent-decode first. IDs also appear as `report%3A<uuid>` — a colon
+    # inside a path segment, not a `/`-delimited one — so matching only
+    # `/<uuid>` left 14 of 25 "new" findings carrying a fresh UUID on every
+    # single run. A diff that reports the same findings as new forever is
+    # not a diff, and a gate built on it can never go green.
+    path = unquote(path)
+    path = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}", path)
+    # Numeric ids in a path segment churn the same way.
+    path = re.sub(r"/\d{4,}(?=/|$)", "/{n}", path)
     return (a.get("alert", ""), a.get("param", ""), a.get("method", ""), path)
 
 
@@ -163,15 +172,39 @@ def verdict(summary: dict, d: dict) -> tuple[bool, str]:
                        "— re-triage and raise max_instances, or scope the rule")
 
     high = summary["counted"]["High"]
-    if high == 0:
-        return True, "no High findings outside the ignore list"
-    new_high = [k for k in d["new"] if any(
-        k.startswith(t + "|") for t in summary["types"].get("High", {}))]
+
+    # Rule 2 of the gate: anything NEW blocks, because nobody has looked at
+    # it yet. Severity is not the question — "has a human reviewed this"
+    # is. High additionally blocks whether new or not, since an unresolved
+    # High is not made acceptable by being old.
+    #
+    # Informational is excluded from "new", and that exclusion is load
+    # bearing rather than a convenience. Its findings are per-URL by
+    # nature: User Agent Fuzzer fires once per path the suite happened to
+    # visit, so any test touching a new page mints new Informational
+    # findings forever. Gating on those makes the gate permanently red,
+    # and a permanently red gate gets bypassed, which is worse than not
+    # having one.
+    blocking_levels = {lvl for lvl in RISK_ORDER if lvl != "Informational"}
+    blocking_alerts = {t for lvl in blocking_levels for t in summary["types"].get(lvl, {})}
+    new_blocking = [k for k in d["new"] if k.split("|")[0] in blocking_alerts]
+
     if d["baseline"]:
-        return False, f"{high} High finding(s) — no previous report to compare against"
-    if new_high:
-        return False, f"{high} High finding(s), {len(new_high)} of them new"
-    return False, f"{high} High finding(s) (none new, still unresolved)"
+        if high:
+            return False, f"{high} High finding(s) — no previous report to compare against"
+        return True, "no High findings outside the ignore list (baseline run, nothing to diff)"
+
+    if high and new_blocking:
+        return False, (f"{high} High finding(s) and {len(new_blocking)} new finding(s) "
+                       "since the last scan — needs review")
+    if high:
+        return False, f"{high} High finding(s) (none new, still unresolved)"
+    if new_blocking:
+        by = collections.Counter(k.split("|")[0] for k in new_blocking)
+        top = ", ".join(f"{n}x {a}" for a, n in by.most_common(3))
+        return False, (f"{len(new_blocking)} new finding(s) since the last scan "
+                       f"— needs review ({top})")
+    return True, "no High findings outside the ignore list, and nothing new since the last scan"
 
 
 def render(summary: dict, d: dict, ok: bool, why: str) -> str:
