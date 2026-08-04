@@ -7,12 +7,23 @@ things with it:
 
   summary  counts by risk level, and the distinct alert types behind them
   diff     what is NEW, what is GONE, versus the previous run
-  verdict  pass/fail, decided ONLY on non-ignored High findings
+  verdict  pass/fail
 
-Why the verdict is narrow: Low and Informational counts move with the
-traffic (fresh UUIDs, timestamps, whatever the e2e suite happened to do),
-so gating on them produces flaky failures, and a flaky gate is one people
-learn to bypass. High is the level worth stopping a release for.
+The verdict fails on any of three things:
+
+  * an un-ignored High finding, new or not — an unresolved High is not
+    made acceptable by being old;
+  * anything NEW at Medium, Low or High — nobody has reviewed it yet, and
+    severity answers "how bad", not "has a human looked at this";
+  * an ignore rule suppressing more than its `max_instances`, checked
+    before the High count, because "no High findings" means nothing if a
+    rule quietly absorbed more than was ever triaged.
+
+Informational is excluded from "new" deliberately. Those findings are
+per-URL by nature — User Agent Fuzzer fires once per path the suite
+visits — so any test touching a new page would mint new findings forever.
+Gating on them makes the gate permanently red, and a permanently red gate
+gets bypassed, which is worse than not having one.
 
 Ignored findings are subtracted from the verdict but still counted and
 printed. A suppression that hides its own existence is how a scanner
@@ -24,7 +35,7 @@ Usage:
 
 Exit codes:
     0  pass
-    1  fail — new (or existing) non-ignored High findings
+    1  fail — see verdict() for the three cases
     2  usage / input error
 """
 
