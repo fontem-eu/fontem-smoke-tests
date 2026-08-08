@@ -111,7 +111,7 @@ def _matches(alert: dict, rule: dict) -> bool:
 # different version cannot be diffed against — every key would look new
 # and the gate would block on the entire report for a reason that is not a
 # security finding. Changing this re-baselines once, deliberately, instead.
-KEY_VERSION = 2
+KEY_VERSION = 3
 
 
 def _key(a: dict) -> tuple:
@@ -132,6 +132,17 @@ def _key(a: dict) -> tuple:
     path = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}", path)
     # Numeric ids in a path segment churn the same way.
     path = re.sub(r"/\d{4,}(?=/|$)", "/{n}", path)
+    # So do content-hashed bundle filenames. Vite emits
+    # `/assets/index-DhLHBDQ7.js`, and the hash changes on every frontend
+    # build, so a finding that has been sitting in the bundle for months
+    # reads as brand new the moment anything ships. That is not a
+    # hypothetical: a Low "Timestamp Disclosure" in the bundle failed the
+    # prod gate on 2026-08-06 purely because the filename moved.
+    path = re.sub(
+        r"-[A-Za-z0-9_-]{8,}(\.(?:js|css|mjs|woff2?|ttf|svg|png|jpg|webp|map))$",
+        r"-{hash}\1",
+        path,
+    )
     return (a.get("alert", ""), a.get("param", ""), a.get("method", ""), path)
 
 
