@@ -2464,53 +2464,25 @@ test.describe.serial('Production Smoke Tests', () => {
     ).toBe(true)
   })
 
-  test('ASSIST-24: Assistant cites concrete data coverage when asked', async ({ page }) => {
-    test.setTimeout(180_000)
-    if (!storyId) test.skip()
-    test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
-    await uiLogin(page)
-    await page.goto(`/stories/${storyId}/edit`)
-    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
-
-    await page.click('[data-testid="assist-toggle"]')
-    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-
-    // The /data-quality/source-freshness endpoint feeds a per-source
-    // coverage block into the system prompt every turn. That means
-    // the assistant should be able to answer "what date range do you
-    // cover?" without calling a tool.
-    const responseText = await sendAssistMessage(
-      page,
-      'What date range does your EU public procurement (TED contracts) ' +
-      'data cover? Give me the earliest and latest dates you have.',
-    )
-    // A 4-digit year — proves the model surfaced a real date range
-    // rather than refusing or hand-waving. We don't pin the specific
-    // year because it shifts as the loaders run.
-    expect(
-      responseText,
-      `Coverage response did not include a year: "${responseText.slice(0, 300)}…"`,
-    ).toMatch(/20\d{2}/)
-    // Two distinct year matches OR a long explanatory answer — guards
-    // against the "I don't know" / "various" hand-wave failure mode.
-    // A terse but structured "Earliest: 2026-03-03 Latest: 2026-06-13"
-    // (49 chars on staging) is exactly the answer we want and shouldn't
-    // be rejected for being short.
-    const yearMatches = responseText.match(/20\d{2}/g) ?? []
-    const looksConcrete = yearMatches.length >= 2 || responseText.length > 50
-    expect(
-      looksConcrete,
-      `Coverage response looks hand-wavy: "${responseText.slice(0, 300)}…"`,
-    ).toBe(true)
-  })
-
-  // ── Full-flow gate: assistant generates → apply → save → reload ──
+  // ASSIST-24 removed 2026-08-09.
   //
-  // The post-revamp smoke battery (ASSIST-22/23/24) covers what the
-  // model SAYS but not what the editor PERSISTS. The bug class that
-  // got us here ("clicking Apply does nothing") only shows up after
-  // a reload, so this test deliberately reloads the page and checks
-  // the inserted content is still there.
+  // It asserted the assistant could cite a concrete date range, on the
+  // stated grounds that "/data-quality/source-freshness feeds a per-source
+  // coverage block into the system prompt every turn". That endpoint 404s
+  // in every environment and always has: _get_freshness_summary caught the
+  // error and injected nothing, so the block the test depended on was never
+  // once present.
+  //
+  // Which means the test could only ever pass by the model producing a
+  // plausible 20XX year from pre-training — rewarding exactly the
+  // ungrounded-figure behaviour the rest of this battery exists to catch.
+  // A test that passes only when the model fabricates is worse than no test.
+  //
+  // The replacement is the catalogue block (fontem-community-api
+  // src/assistant/catalogue.py), which is generated from the platform's own
+  // registries and carries per-source coverage text. Once that ships, assert
+  // against it instead — with a coverage phrase from the data, not a bare
+  // year-shaped regex that any hallucination satisfies.
 
   test('ASSIST-25: full assistant→edit→save→reload round-trip', async ({ page }) => {
     test.setTimeout(240_000)
