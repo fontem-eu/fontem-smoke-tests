@@ -23,11 +23,41 @@ function ownerToken() {
   return (origin.localStorage || []).find((e) => e.name === 'gmr-token')?.value
 }
 
+// The access token is captured once by global-setup and this file runs ~15
+// minutes into the suite, by which point the JWT has expired — TRANS-01 was
+// failing on its first call with {"detail":"Invalid or expired token"}. The
+// browser-driven tests never saw it because their context carries the
+// httpOnly refresh cookie and the app renews silently; a raw bearer does not.
+//
+// So renew the same way the app does. `request` inherits the storageState
+// cookies, so /auth/refresh works without touching /auth/login — which
+// matters, because login is rate limited to 5/min per IP and a retry storm
+// there would take out the whole suite.
+let _tok = null
+async function freshToken(request) {
+  if (_tok === null) _tok = ownerToken()
+  return _tok
+}
+
 async function api(request, tok, method, path, data) {
-  const opts = { headers: { Authorization: `Bearer ${tok}` } }
-  if (data !== undefined) opts.data = data
-  const r = await request[method.toLowerCase()](`/capi${path}`, opts)
-  return { status: r.status(), body: await r.json().catch(() => null) }
+  const call = async (t) => {
+    const opts = { headers: { Authorization: `Bearer ${t}` } }
+    if (data !== undefined) opts.data = data
+    const r = await request[method.toLowerCase()](`/capi${path}`, opts)
+    return { status: r.status(), body: await r.json().catch(() => null) }
+  }
+  let out = await call(tok || (await freshToken(request)))
+  if (out.status === 401) {
+    const r = await request.post('/capi/auth/refresh')
+    if (r.ok()) {
+      const body = await r.json().catch(() => null)
+      if (body?.access_token) {
+        _tok = body.access_token
+        out = await call(_tok)
+      }
+    }
+  }
+  return out
 }
 
 const doc = (text) => ({
