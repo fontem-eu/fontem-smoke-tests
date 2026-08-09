@@ -13,6 +13,7 @@
  */
 import { test, expect } from './baseTest.js'
 import fs from 'node:fs/promises'
+import https from 'node:https'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -2011,22 +2012,56 @@ test.describe.serial('Production Smoke Tests', () => {
   let _llmOk = null
   async function llmAvailable() {
     if (_llmOk !== null) return _llmOk
-    _llmOk = false
-    try {
-      const state = JSON.parse(await fs.readFile('./auth.json', 'utf8'))
-      const origin = (state.origins || [])[0] || {}
-      const token = (origin.localStorage || []).find((e) => e.name === 'gmr-token')?.value
-      const base = process.env.BASE_URL || 'https://fontem.testing.void42.internal'
-      const res = await fetch(`${base}/capi/assist/chat/stream`, {
+    const state = JSON.parse(await fs.readFile('./auth.json', 'utf8'))
+    const origin = (state.origins || [])[0] || {}
+    const token = (origin.localStorage || []).find((e) => e.name === 'gmr-token')?.value
+    const base = process.env.BASE_URL || 'https://fontem.testing.void42.internal'
+    const u = new URL(`${base}/capi/assist/chat/stream`)
+
+    // https.request, not fetch(). The internal domains serve a private CA
+    // cert; global-setup and the browser contexts both opt out of
+    // verification (rejectUnauthorized:false / ignoreHTTPSErrors) but bare
+    // fetch() does not, so it threw on every single run. The old catch
+    // swallowed that into "LLM unavailable" and skipped all ten ASSIST
+    // tests with a message blaming the discontinued upstream key — green,
+    // silent, and wrong for months. A probe that cannot tell "no LLM" from
+    // "I could not ask" is not a probe.
+    const body = JSON.stringify({ message: 'ping', conversation_key: `probe-${process.pid}` })
+    const res = await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: u.hostname,
+        port: u.port || 443,
+        path: u.pathname,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ message: 'ping', conversation_key: `probe-${process.pid}` }),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'Content-Length': Buffer.byteLength(body),
+        },
+        ...(/\.void42\.internal$/.test(u.hostname) ? { rejectUnauthorized: false } : {}),
+      }, (r) => {
+        const chunks = []
+        r.on('data', (c) => chunks.push(c))
+        r.on('end', () => resolve({ status: r.statusCode, text: Buffer.concat(chunks).toString('utf-8') }))
       })
-      if (res.ok) {
-        const text = await res.text()
-        _llmOk = !/event:\s*error/.test(text)
-      }
-    } catch { _llmOk = false }
+      req.on('error', reject)
+      req.setTimeout(90_000, () => req.destroy(new Error('assistant probe timed out')))
+      req.write(body)
+      req.end()
+    })
+
+    // A transport or auth failure is OUR problem and must be loud. Only a
+    // clean response that reports an LLM error counts as "no LLM here".
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`assistant probe could not authenticate (${res.status}) — fix the probe, do not skip the suite`)
+    }
+    if (res.status >= 500) {
+      throw new Error(`assistant probe got ${res.status} from ${base} — the API is broken, not the LLM`)
+    }
+    _llmOk = res.status === 200 && !/event:\s*error/.test(res.text)
+    if (!_llmOk) {
+      console.warn(`[assist] LLM unavailable: status=${res.status} body=${res.text.slice(0, 200)}`)
+    }
     return _llmOk
   }
 
