@@ -73,5 +73,8 @@ spec:
             - name: TEST_PASSWORD
               valueFrom: { secretKeyRef: { name: gmr-smoke-creds, key: password } }
           resources:
-            requests: { memory: "512Mi", cpu: "250m" }
-            limits: { memory: "1Gi", cpu: "1000m" }
+            # Chromium compiling a ~40MB DuckDB wasm plus the app itself is
+            # CPU-bound; at 250m the ARTICLE tests starved and flaked. The
+            # gate runs one job at a time, so this is burst, not footprint.
+            requests: { memory: "2Gi", cpu: "2" }
+            limits: { memory: "4Gi", cpu: "4" }

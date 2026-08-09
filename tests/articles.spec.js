@@ -16,7 +16,11 @@ import fs from 'node:fs'
 import { test, expect } from './baseTest.js'
 
 const RUN = String(Date.now())
-const COMBINE = 90_000 // SPARQL/SQL proxy + DuckDB combine can be slow
+// The SPARQL side answers in ~50ms (measured); this budget is almost
+// entirely the browser fetching and compiling a ~40MB DuckDB wasm on a
+// shared CI node. 90s was flaky under cluster load with the old 250m-CPU
+// runner; the runner now gets real CPU and this covers the long tail.
+const COMBINE = 150_000
 
 function ownerToken() {
   const state = JSON.parse(fs.readFileSync('./auth.json', 'utf8'))

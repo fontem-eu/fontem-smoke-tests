@@ -463,16 +463,17 @@ test.describe.serial('Production Smoke Tests', () => {
     // `/contract/null`, which is a dead page. So the invariant is not
     // "every row is a link" but "no row escapes to TED, and any link
     // there is goes to our detail page".
-    const linkable = await page.locator('[data-testid^="contract-title-link-"]').count()
-    if (linkable > 0) {
-      const tableLink = page.locator('[data-testid^="contract-title-link-"]').first()
-      await tableLink.waitFor({ state: 'visible', timeout: 20_000 })
-      const href = await tableLink.getAttribute('href')
-      expect(href).toMatch(/^\/contract\/.+/)
-      expect(href).not.toContain('/contract/null')
+    // Retrying assertions, not count() snapshots: the panel becomes
+    // visible before its rows settle, and a snapshot taken in that window
+    // judged a half-rendered table. toHaveCount/toHaveAttribute poll.
+    const tedLinks = page.locator('[data-testid^="contract-ted-link-"]')
+    await expect(tedLinks, 'no row may escape to TED').toHaveCount(0, { timeout: 15_000 })
+    const tableLink = page.locator('[data-testid^="contract-title-link-"]').first()
+    const linkable = await tableLink.waitFor({ state: 'visible', timeout: 10_000 })
+      .then(() => true).catch(() => false)
+    if (linkable) {
+      await expect(tableLink).toHaveAttribute('href', /^\/contract\/(?!null).+/)
     }
-    // No row links straight out to TED or the redirector any more.
-    expect(await page.locator('[data-testid^="contract-ted-link-"]').count()).toBe(0)
     expect(await page.locator('a[href*="ted.europa.eu"]').count()).toBe(0)
     // Every row is accounted for: linked when it has a notice id, plain
     // text when it does not. The count that must hold is linked+unlinked
@@ -2205,8 +2206,12 @@ test.describe.serial('Production Smoke Tests', () => {
       `to this report. The paragraph must contain the exact string ${marker}. ` +
       'Just one short paragraph — no other prose.')
 
-    // Proposal card should render.
-    await expect(page.locator('[data-testid="assist-proposals"]').last()).toBeVisible({ timeout: 10_000 })
+    // The card renders the moment the proposal event arrives (mid-stream),
+    // but wait for the turn to settle anyway: the window used to be
+    // anchored to the first chunk, and at 15 tok/s the prose tail alone
+    // outlived it — that anchor was this test's entire flake.
+    await expect(page.locator('[data-testid="assist-status"]')).toBeHidden({ timeout: 150_000 })
+    await expect(page.locator('[data-testid="assist-proposals"]').last()).toBeVisible({ timeout: 30_000 })
     await expect(page.locator('[data-testid="proposal-action"]').last()).toBeVisible()
 
     // Apply the proposal.
