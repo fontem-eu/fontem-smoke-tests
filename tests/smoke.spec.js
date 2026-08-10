@@ -1905,10 +1905,10 @@ test.describe.serial('Production Smoke Tests', () => {
     // 60s both got hit and triggered the suite-wide retry; 120s is the
     // matching ceiling for the streaming-done wait below.
     await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`)
-      .waitFor({ state: 'visible', timeout: 120_000 })
+      .waitFor({ state: 'visible', timeout: 150_000 })
     const statusEl = page.locator('[data-testid="assist-status"]')
     if (await statusEl.isVisible().catch(() => false)) {
-      await statusEl.waitFor({ state: 'hidden', timeout: 120_000 })
+      await statusEl.waitFor({ state: 'hidden', timeout: 150_000 })
     } else {
       await page.waitForTimeout(1000)
     }
@@ -2006,17 +2006,23 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.click('[data-testid="assist-send"]')
 
     // Wait for a NEW assistant message to appear (count increases).
-    // 120s ceiling matches sendAssistMessageAndCaptureStatuses — see
-    // its comment for the Mistral first-token latency we observed on
-    // chained tool-using turns.
-    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`).waitFor({ state: 'visible', timeout: 120_000 })
+    // 150s, raised from 120s. The ceiling has to clear the worst turn the
+    // suite provokes, not the average one: the tool loop runs up to 10
+    // rounds and the non-prod agent generates at ~14 tok/s on a node it
+    // shares with the testing workloads. At 120s, ASSIST-22 and ASSIST-MCP-1
+    // took turns failing on different runs while each passed standalone in
+    // seconds — the signature of a deadline, not a defect.
+    //
+    // It must also stay below the caller's test.setTimeout with room for the
+    // assertions that follow; those are 240s for the assistant tests.
+    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`).waitFor({ state: 'visible', timeout: 150_000 })
 
     // Wait for streaming to finish — the status indicator appears during streaming
     // and disappears when done. If it's already gone, streaming was fast.
     const status = page.locator('[data-testid="assist-status"]')
     const statusVisible = await status.isVisible().catch(() => false)
     if (statusVisible) {
-      await status.waitFor({ state: 'hidden', timeout: 120_000 })
+      await status.waitFor({ state: 'hidden', timeout: 150_000 })
     } else {
       // Status may have already disappeared — give a moment for final parsing
       await page.waitForTimeout(1000)
@@ -2143,7 +2149,7 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('ASSIST-20: Assistant proposes edit, user applies it, content lands in editor', async ({ page }) => {
-    test.setTimeout(180_000)
+    test.setTimeout(240_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2202,7 +2208,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // hide behind plausible-sounding LLM completions.
     // 180s: this turn forces a real search_entities tool call, the
     // slowest Mistral path (see ASSIST-21's note on 120s being too tight).
-    test.setTimeout(180_000)
+    test.setTimeout(240_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2240,7 +2246,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // proposal as soon as the stream completes, marks the proposal
     // autoApplied so the UI shows "Applied automatically" instead of
     // the Apply/Dismiss buttons).
-    test.setTimeout(120_000)
+    test.setTimeout(240_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2312,7 +2318,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // even though the inner waitFor still had time. The sibling tests
     // ASSIST-22/23/24 — which run later with EVEN longer context —
     // already use 180s and pass reliably; 120s here was the outlier.
-    test.setTimeout(180_000)
+    test.setTimeout(240_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2359,7 +2365,7 @@ test.describe.serial('Production Smoke Tests', () => {
   // capability.
 
   test('ASSIST-22: Authority investigation dispatches correctly (no wrong-tool dead-end)', async ({ page }) => {
-    test.setTimeout(180_000)
+    test.setTimeout(240_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2390,7 +2396,7 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('ASSIST-23: Assistant grounds numeric claims in actual graph data', async ({ page }) => {
-    test.setTimeout(180_000)
+    test.setTimeout(240_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
