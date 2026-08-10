@@ -1452,74 +1452,6 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
 
-  test('STORY-FLOWERS-2: hitting the 50-cap disables the button with the cap tooltip', async ({ page }) => {
-    // Seed 50 flowers via the API (cheap), then load the story and
-    // assert the button rendered as cap-reached. Locks in the only
-    // load-bearing policy of the feature — if the cap regresses, no
-    // other test catches it.
-    await uiLogin(page)
-    const token = await freshAccessToken(page)
-    if (!token) test.skip()
-    const capStoryId = await page.evaluate(async ({ runId, tok }) => {
-      const r = await fetch('/capi/data-stories', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ title: `Cap Smoke Story ${runId}`, abstract: 'Story under flower-cap smoke test.' }),
-      })
-      if (!r.ok) throw new Error(`create story failed: ${r.status} ${await r.text()}`)
-      const { id } = await r.json()
-      const v = await fetch(`/capi/data-stories/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ title: `Cap Smoke Story ${runId}`, abstract: 'Story under flower-cap smoke test.', visibility: 'public_open' }),
-      })
-      if (!v.ok) throw new Error(`make-public failed: ${v.status} ${await v.text()}`)
-      return id
-    }, { runId: RUN_ID, tok: token })
-
-    try {
-      // Pour 50 flowers in serially — keeps the test independent of
-      // the backend's serialisation guarantees.
-      const final = await page.evaluate(async ({ id, tok }) => {
-        let last = null
-        for (let i = 0; i < 50; i++) {
-          const r = await fetch(`/capi/data-stories/${id}/flowers`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${tok}` },
-          })
-          if (!r.ok) throw new Error(`POST ${i} failed: ${r.status} ${await r.text()}`)
-          last = await r.json()
-        }
-        return last
-      }, { id: capStoryId, tok: token })
-      expect(final.mine).toBe(50)
-      await demoMark(page, `STORY-FLOWERS-2 — capped at 50, button must be disabled`, 1500)
-
-      await page.goto(`/stories/${capStoryId}?cb=${Date.now()}`)
-      const btn = page.locator('[data-testid="flower-button"]')
-      await expect(btn).toBeVisible({ timeout: 15_000 })
-      await expect(btn).toBeDisabled({ timeout: 5_000 })
-      const title = await btn.getAttribute('title')
-      expect(title).toContain('50')
-
-      // 51st click via API must be rejected with 400.
-      const reject = await page.evaluate(async ({ id, tok }) => {
-        const r = await fetch(`/capi/data-stories/${id}/flowers`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${tok}` },
-        })
-        return r.status
-      }, { id: capStoryId, tok: token })
-      expect(reject).toBe(400)
-    } finally {
-      await page.evaluate(async ({ id, tok }) => {
-        await fetch(`/capi/data-stories/${id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${tok}` },
-        })
-      }, { id: capStoryId, tok: token })
-    }
-  })
 
 
   test('STORY-FLOWERS-3: anonymous visitor sees the button rendered but disabled with sign-in tooltip', async ({ page, browser }) => {
@@ -2948,5 +2880,88 @@ test.describe.serial('Production Smoke Tests', () => {
       headers: { Authorization: `Bearer ${token}` },
     })
     expect([204, 404]).toContain(resp.status())
+  })
+
+  // ---------------------------------------------------------------------
+  // STORY-FLOWERS-2 lives at the END of this file on purpose.
+  //
+  // It seeds 50 flowers in a tight POST loop to prove the cap disables the
+  // button. That burst trips the nginx ingress rate limiter, and every test
+  // sequenced after it inherited the cooldown: STORY-IMAGE-UPLOAD and others
+  // failed with a 429 served by nginx, not by the app, which reads as a
+  // product bug and is not one. The suite is serial (workers: 1), so file
+  // order is execution order and moving the burst last confines the damage
+  // to itself.
+  //
+  // Keep it last. Anything appended below it will start failing for reasons
+  // that have nothing to do with the code it tests.
+  // ---------------------------------------------------------------------
+  test('STORY-FLOWERS-2: hitting the 50-cap disables the button with the cap tooltip', async ({ page }) => {
+    // Seed 50 flowers via the API (cheap), then load the story and
+    // assert the button rendered as cap-reached. Locks in the only
+    // load-bearing policy of the feature — if the cap regresses, no
+    // other test catches it.
+    await uiLogin(page)
+    const token = await freshAccessToken(page)
+    if (!token) test.skip()
+    const capStoryId = await page.evaluate(async ({ runId, tok }) => {
+      const r = await fetch('/capi/data-stories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ title: `Cap Smoke Story ${runId}`, abstract: 'Story under flower-cap smoke test.' }),
+      })
+      if (!r.ok) throw new Error(`create story failed: ${r.status} ${await r.text()}`)
+      const { id } = await r.json()
+      const v = await fetch(`/capi/data-stories/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ title: `Cap Smoke Story ${runId}`, abstract: 'Story under flower-cap smoke test.', visibility: 'public_open' }),
+      })
+      if (!v.ok) throw new Error(`make-public failed: ${v.status} ${await v.text()}`)
+      return id
+    }, { runId: RUN_ID, tok: token })
+
+    try {
+      // Pour 50 flowers in serially — keeps the test independent of
+      // the backend's serialisation guarantees.
+      const final = await page.evaluate(async ({ id, tok }) => {
+        let last = null
+        for (let i = 0; i < 50; i++) {
+          const r = await fetch(`/capi/data-stories/${id}/flowers`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${tok}` },
+          })
+          if (!r.ok) throw new Error(`POST ${i} failed: ${r.status} ${await r.text()}`)
+          last = await r.json()
+        }
+        return last
+      }, { id: capStoryId, tok: token })
+      expect(final.mine).toBe(50)
+      await demoMark(page, `STORY-FLOWERS-2 — capped at 50, button must be disabled`, 1500)
+
+      await page.goto(`/stories/${capStoryId}?cb=${Date.now()}`)
+      const btn = page.locator('[data-testid="flower-button"]')
+      await expect(btn).toBeVisible({ timeout: 15_000 })
+      await expect(btn).toBeDisabled({ timeout: 5_000 })
+      const title = await btn.getAttribute('title')
+      expect(title).toContain('50')
+
+      // 51st click via API must be rejected with 400.
+      const reject = await page.evaluate(async ({ id, tok }) => {
+        const r = await fetch(`/capi/data-stories/${id}/flowers`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${tok}` },
+        })
+        return r.status
+      }, { id: capStoryId, tok: token })
+      expect(reject).toBe(400)
+    } finally {
+      await page.evaluate(async ({ id, tok }) => {
+        await fetch(`/capi/data-stories/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${tok}` },
+        })
+      }, { id: capStoryId, tok: token })
+    }
   })
 })
