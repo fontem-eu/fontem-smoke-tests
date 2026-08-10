@@ -55,6 +55,31 @@ spec:
         linkerd.io/inject: disabled
     spec:
       restartPolicy: Never
+      # Keep the browser off whichever node is running an inference agent.
+      #
+      # The gate had been failing on a different test every run while every
+      # one of them passed standalone in seconds — ASSIST-22, TRANS-01,
+      # PUBLIC-1, INV-1, M5, POCKET-STORY, FEED-TAG-PERSIST, all rotating.
+      # That is contention, not regression: llama-server runs --threads 10
+      # on a 14-core node, and Chromium compiling a ~40MB DuckDB wasm was
+      # landing on the same one. Whichever test happened to be running when
+      # the agent took the cores is the one that failed.
+      #
+      # Preferred rather than required, deliberately: if no other node has
+      # room the gate should still run, slowly, rather than sit Pending and
+      # report a scheduling problem as a test failure.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                namespaces: ["llm-service"]
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: ["llama-server", "llama-server-nonprod"]
       imagePullSecrets:
         - name: regcred
       containers:
