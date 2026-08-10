@@ -12,16 +12,10 @@
  * dynamics under test are the UI's rendering of translation state, not
  * typing latin text into TipTap.
  */
-import fs from 'node:fs'
-import { test, expect } from './baseTest.js'
+import { test, expect, bootstrapToken } from './baseTest.js'
 
 const RUN = String(Date.now())
 
-function ownerToken() {
-  const state = JSON.parse(fs.readFileSync('./auth.json', 'utf8'))
-  const origin = (state.origins || [])[0] || {}
-  return (origin.localStorage || []).find((e) => e.name === 'gmr-token')?.value
-}
 
 // The access token is captured once by global-setup and this file runs ~15
 // minutes into the suite, by which point the JWT has expired — TRANS-01 was
@@ -34,8 +28,17 @@ function ownerToken() {
 // matters, because login is rate limited to 5/min per IP and a retry storm
 // there would take out the whole suite.
 let _tok = null
-async function freshToken(request) {
-  if (_tok === null) _tok = ownerToken()
+async function freshToken() {
+  // One renewal implementation for the whole suite. This used to read the
+  // token global-setup minted and hope the 401 retry below could recover
+  // with /auth/refresh -- but refresh rotates the token family, so whichever
+  // context refreshes first invalidates it for everyone else, and the retry
+  // that was supposed to be the safety net is itself the failure mode.
+  //
+  // baseTest renews by logging in again inside a margin before expiry, which
+  // is rotation-free. Deferring to it means this file cannot drift from the
+  // browser-driven tests about what "the current token" is.
+  _tok = await bootstrapToken()
   return _tok
 }
 
@@ -46,7 +49,7 @@ async function api(request, tok, method, path, data) {
     const r = await request[method.toLowerCase()](`/capi${path}`, opts)
     return { status: r.status(), body: await r.json().catch(() => null) }
   }
-  let out = await call(tok || (await freshToken(request)))
+  let out = await call(tok || (await freshToken()))
   if (out.status === 401) {
     const r = await request.post('/capi/auth/refresh')
     if (r.ok()) {
@@ -78,11 +81,11 @@ test.describe('Article translations', () => {
   let sid
 
   test.afterAll(async ({ request }) => {
-    if (sid) await api(request, ownerToken(), 'DELETE', `/data-stories/${sid}`)
+    if (sid) await api(request, await freshToken(), 'DELETE', `/data-stories/${sid}`)
   })
 
   test('TRANS-01: translated content renders; original edits flag it; resolve clears it', async ({ page, request }) => {
-    const tok = ownerToken()
+    const tok = await freshToken()
     // feature-detect the translations API is deployed here
     const probe = await api(request, tok, 'POST', '/data-stories', { title: `Translation e2e ${RUN}` })
     expect(probe.status, JSON.stringify(probe.body)).toBe(201)
@@ -193,7 +196,7 @@ test.describe('Article translations', () => {
     await ctx.close()
   })
 
-  test('TRANS-02: untranslated language prefills the editor with the original', async ({ page, request }) => {
+  test('TRANS-02: untranslated language prefills the editor with the original', async ({ page }) => {
     test.skip(!sid, 'TRANS-01 setup did not run')
     await page.goto(`/stories/${sid}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 20_000 })

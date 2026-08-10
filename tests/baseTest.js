@@ -107,7 +107,7 @@ function login() {
   })
 }
 
-async function bootstrapToken() {
+export async function bootstrapToken() {
   if (cachedToken === null) cachedToken = readStoredToken()
   if (!cachedToken) return ''
   if (msUntilExpiry(cachedToken) > RENEW_MARGIN_MS) return cachedToken
