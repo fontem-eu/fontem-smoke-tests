@@ -2090,8 +2090,18 @@ test.describe.serial('Production Smoke Tests', () => {
       await page.waitForTimeout(1000)
     }
 
-    // Return the text of the newest assistant message
-    return page.locator('.assist-msg--assistant .msg-text').last().innerText()
+    // Wait for the message to actually CONTAIN something before reading it.
+    //
+    // The bubble now appears earlier than it used to: a proposal or a
+    // thinking event creates the assistant message before any prose has
+    // streamed, so "element visible" stopped implying "text present" and
+    // this helper started returning "" — ASSIST-19 failed asserting against
+    // an empty string while the answer was still arriving. Waiting on the
+    // element was always the weaker assumption; it only held because the
+    // bubble happened to be created by the first text chunk.
+    const body = page.locator('.assist-msg--assistant .msg-text').last()
+    await expect(body).not.toHaveText('', { timeout: 60_000 })
+    return body.innerText()
   }
 
   // AI assistant: re-enabled after migration from Claude CLI/OAuth proxy to
