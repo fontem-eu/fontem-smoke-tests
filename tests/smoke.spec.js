@@ -2099,8 +2099,23 @@ test.describe.serial('Production Smoke Tests', () => {
     // an empty string while the answer was still arriving. Waiting on the
     // element was always the weaker assumption; it only held because the
     // bubble happened to be created by the first text chunk.
+    // Wait for prose OR a proposal card — whichever the turn produces.
+    //
+    // Waiting only for text was a mistake I introduced alongside a prompt
+    // that tells the model "do not answer in prose". Obeyed perfectly, that
+    // turn emits a tool call and nothing else, and the helper then blocked
+    // 60s on text that was never coming. The two changes contradicted each
+    // other, and the failure surfaced as a later assertion rather than here.
+    //
+    // A turn is "answered" when either surface has content, so wait on the
+    // union and let the caller assert on whichever it cares about.
     const body = page.locator('.assist-msg--assistant .msg-text').last()
-    await expect(body).not.toHaveText('', { timeout: 60_000 })
+    const card = page.locator('[data-testid="assist-proposals"]')
+    await expect
+      .poll(async () => (await body.innerText()).trim().length
+              + await card.count(),
+            { timeout: 60_000, message: 'assistant produced neither prose nor a proposal' })
+      .toBeGreaterThan(0)
     return body.innerText()
   }
 
