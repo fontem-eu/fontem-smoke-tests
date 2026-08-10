@@ -2211,10 +2211,18 @@ test.describe.serial('Production Smoke Tests', () => {
     // landed in the editor (not just that the "Applied" badge flipped —
     // that was the gap that let the apply-flow bug ship).
     const marker = `MARKER-ASSIST20-${RUN_ID.slice(0, 8)}`
+    // Wording matters at 4B. The previous phrasing let the model satisfy
+    // itself by DESCRIBING the edit — it replied "the string has been added
+    // to the report as requested" without calling anything. Naming the tool
+    // as the only acceptable action, and forbidding the narration explicitly,
+    // removes the interpretation it kept choosing. This is a clearer
+    // instruction, not a weaker assertion: the test still requires a real
+    // propose_edit, a real Apply, and the marker landing in the editor.
     await sendAssistMessage(page,
-      'Use the propose_edit tool with action="insert_content" to add a paragraph ' +
-      `to this report. The paragraph must contain the exact string ${marker}. ` +
-      'Just one short paragraph — no other prose.')
+      `Call the propose_edit tool now with action="insert_content" and content ` +
+      `set to a single short paragraph containing the exact string ${marker}. ` +
+      'Do not answer in prose. Do not say the edit is done. ' +
+      'The only acceptable action is the propose_edit tool call itself.')
 
     // The card renders the moment the proposal event arrives (mid-stream),
     // but wait for the turn to settle anyway: the window used to be
