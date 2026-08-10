@@ -2548,6 +2548,18 @@ test.describe.serial('Production Smoke Tests', () => {
     await uiLogin(page)
     await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="visibility-select"]')).toBeVisible({ timeout: 10_000 })
+
+    // Set the title here rather than inheriting whatever this story ended
+    // up with. `storyId` is shared, and the assistant tests above now
+    // really do mutate it — ASSIST-BYPASS auto-applies an update_title to
+    // this exact story. That only became true when propose_edit started
+    // being offered at all; before, those tests were no-ops and this one
+    // read a title nobody had touched. What it actually pins is that an
+    // anonymous visitor gets the story instead of a login redirect, so the
+    // title it asserts on should be this test's own precondition and not a
+    // side effect of a model's word choice three tests earlier.
+    const publicTitle = `Public Smoke ${RUN_ID.slice(0, 8)}`
+    await page.fill('[data-testid="story-title-input"]', publicTitle)
     await page.selectOption('[data-testid="visibility-select"]', 'public_open')
     await page.click('[data-testid="save-story"]')
     await expect(page.locator('[data-testid="save-story"]')).toBeEnabled({ timeout: 10_000 })
@@ -2578,7 +2590,12 @@ test.describe.serial('Production Smoke Tests', () => {
       // reports as "hidden" — so toBeVisible() raced the fetch on a cold
       // context and flaked. Assert non-empty text (i.e. the data landed)
       // rather than visibility of a possibly-empty node.
-      await expect(visitor.locator('[data-testid="story-title"]')).toHaveText(/\S/, { timeout: 20_000 })
+      // The exact title this test set, not merely "some text": with a
+      // shared story that other tests now really do edit, /\S/ passes on
+      // whatever happened to be there and would keep passing if the story
+      // fetch quietly returned the wrong record.
+      await expect(visitor.locator('[data-testid="story-title"]'))
+        .toHaveText(publicTitle, { timeout: 20_000 })
       // No login form lurking (would mean we silently landed on /login).
       expect(await visitor.locator('[data-testid="login-email"]').count()).toBe(0)
     } finally {
