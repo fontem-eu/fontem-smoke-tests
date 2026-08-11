@@ -1948,7 +1948,10 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.click('[data-testid="assist-send"]')
 
     // Wait for a NEW assistant message to appear (count increases).
-    // 150s, raised from 120s. The ceiling has to clear the worst turn the
+    // 200s. ASSIST-21 forces a real search_entities chain and is the
+    // slowest turn the suite provokes; at 150s it timed out on both
+    // attempts against staging while every other assistant test passed.
+    // The ceiling has to clear the worst turn the
     // suite provokes, not the average one: the tool loop runs up to 10
     // rounds and the non-prod agent generates at ~14 tok/s on a node it
     // shares with the testing workloads. At 120s, ASSIST-22 and ASSIST-MCP-1
@@ -1957,14 +1960,14 @@ test.describe.serial('Production Smoke Tests', () => {
     //
     // It must also stay below the caller's test.setTimeout with room for the
     // assertions that follow; those are 240s for the assistant tests.
-    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`).waitFor({ state: 'visible', timeout: 150_000 })
+    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`).waitFor({ state: 'visible', timeout: 200_000 })
 
     // Wait for streaming to finish — the status indicator appears during streaming
     // and disappears when done. If it's already gone, streaming was fast.
     const status = page.locator('[data-testid="assist-status"]')
     const statusVisible = await status.isVisible().catch(() => false)
     if (statusVisible) {
-      await status.waitFor({ state: 'hidden', timeout: 150_000 })
+      await status.waitFor({ state: 'hidden', timeout: 200_000 })
     } else {
       // Status may have already disappeared — give a moment for final parsing
       await page.waitForTimeout(1000)
@@ -2091,7 +2094,7 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('ASSIST-20: Assistant proposes edit, user applies it, content lands in editor', async ({ page }) => {
-    test.setTimeout(240_000)
+    test.setTimeout(300_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2123,7 +2126,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // but wait for the turn to settle anyway: the window used to be
     // anchored to the first chunk, and at 15 tok/s the prose tail alone
     // outlived it — that anchor was this test's entire flake.
-    await expect(page.locator('[data-testid="assist-status"]')).toBeHidden({ timeout: 150_000 })
+    await expect(page.locator('[data-testid="assist-status"]')).toBeHidden({ timeout: 200_000 })
     await expect(page.locator('[data-testid="assist-proposals"]').last()).toBeVisible({ timeout: 30_000 })
     await expect(page.locator('[data-testid="proposal-action"]').last()).toBeVisible()
 
@@ -2165,7 +2168,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // proposal as soon as the stream completes, marks the proposal
     // autoApplied so the UI shows "Applied automatically" instead of
     // the Apply/Dismiss buttons).
-    test.setTimeout(240_000)
+    test.setTimeout(300_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2237,7 +2240,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // even though the inner waitFor still had time. The sibling tests
     // ASSIST-22/23/24 — which run later with EVEN longer context —
     // already use 180s and pass reliably; 120s here was the outlier.
-    test.setTimeout(240_000)
+    test.setTimeout(300_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2284,7 +2287,7 @@ test.describe.serial('Production Smoke Tests', () => {
   // capability.
 
   test('ASSIST-22: Authority investigation dispatches correctly (no wrong-tool dead-end)', async ({ page }) => {
-    test.setTimeout(240_000)
+    test.setTimeout(300_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2315,7 +2318,7 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('ASSIST-23: Assistant grounds numeric claims in actual graph data', async ({ page }) => {
-    test.setTimeout(240_000)
+    test.setTimeout(300_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2380,7 +2383,7 @@ test.describe.serial('Production Smoke Tests', () => {
   // year-shaped regex that any hallucination satisfies.
 
   test('ASSIST-25: full assistant→edit→save→reload round-trip', async ({ page }) => {
-    test.setTimeout(240_000)
+    test.setTimeout(300_000)
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
 
