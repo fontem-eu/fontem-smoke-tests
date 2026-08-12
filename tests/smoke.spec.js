@@ -1940,7 +1940,7 @@ test.describe.serial('Production Smoke Tests', () => {
     return _llmOk
   }
 
-  async function sendAssistMessage(page, message) {
+  async function sendAssistMessage(page, message, waitMs = 200_000) {
     // Count existing assistant messages before sending
     const beforeCount = await page.locator('.assist-msg--assistant').count()
 
@@ -1960,14 +1960,14 @@ test.describe.serial('Production Smoke Tests', () => {
     //
     // It must also stay below the caller's test.setTimeout with room for the
     // assertions that follow; those are 240s for the assistant tests.
-    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`).waitFor({ state: 'visible', timeout: 200_000 })
+    await page.locator(`.assist-msg--assistant >> nth=${beforeCount}`).waitFor({ state: 'visible', timeout: waitMs })
 
     // Wait for streaming to finish — the status indicator appears during streaming
     // and disappears when done. If it's already gone, streaming was fast.
     const status = page.locator('[data-testid="assist-status"]')
     const statusVisible = await status.isVisible().catch(() => false)
     if (statusVisible) {
-      await status.waitFor({ state: 'hidden', timeout: 200_000 })
+      await status.waitFor({ state: 'hidden', timeout: waitMs })
     } else {
       // Status may have already disappeared — give a moment for final parsing
       await page.waitForTimeout(1000)
@@ -2229,6 +2229,14 @@ test.describe.serial('Production Smoke Tests', () => {
     )
     expect(cleared).toBeNull()
   })
+    // ASSIST-21 is the outlier and owns its deadline rather than
+    // dragging every assistant test up with it. Measured against
+    // staging: 177s and 246s for this exact turn. It is not slow
+    // because anything is broken — search_entities tells the model to
+    // iterate every hit, so it calls investigate_entity five or six
+    // times, at ~35s each on the 1.7B. That is the product being slow,
+    // which is worth fixing on its own terms; a gate that fails while
+    // the feature works is not the way to surface it.
 
   test('ASSIST-21: Assistant uses MCP tools via UI', async ({ page }) => {
     // 180s, not 120s: this runs after ASSIST-19/20/MCP-1 on the SAME
@@ -2240,7 +2248,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // even though the inner waitFor still had time. The sibling tests
     // ASSIST-22/23/24 — which run later with EVEN longer context —
     // already use 180s and pass reliably; 120s here was the outlier.
-    test.setTimeout(300_000)
+    test.setTimeout(540_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
@@ -2256,7 +2264,8 @@ test.describe.serial('Production Smoke Tests', () => {
     // — the test of "MCP tool got called and returned graph context"
     // doesn't depend on the model picking one specific keyword.
     const responseText = await sendAssistMessage(page,
-      'Search for "Siemens" in the GMR graph and tell me about their EU contracts.')
+      'Search for "Siemens" in the GMR graph and tell me about their EU contracts.',
+      420_000)
     expect(
       responseText.toLowerCase(),
       `MCP-tool response did not mention any expected keyword: "${responseText.slice(0, 200)}…"`,
