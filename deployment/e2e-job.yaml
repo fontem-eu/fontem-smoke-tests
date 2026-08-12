@@ -41,7 +41,7 @@ spec:
   # the LLM-streaming ASSIST tests) rather than the median, so a slow
   # run fails as "slow" rather than being killed mid-flight and
   # reported as a broken gate.
-  activeDeadlineSeconds: 1800
+  activeDeadlineSeconds: 3900
   # Let finished Jobs clean themselves up; the workflow collects logs
   # before this fires, and nothing should accumulate in the namespace.
   ttlSecondsAfterFinished: 3600
