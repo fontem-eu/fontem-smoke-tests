@@ -2351,7 +2351,10 @@ test.describe.serial('Production Smoke Tests', () => {
   })
 
   test('ASSIST-NAV: navigation asks first, and accept-all does not answer for you', async ({ page }) => {
-    test.setTimeout(300_000)
+    // Three attempts at 120s each plus the click, so the deadline has to
+    // clear 360s of asking. A navigate turn is one short tool call — the
+    // 200s default exists for ASSIST-21's search chain, not for this.
+    test.setTimeout(420_000)
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
 
@@ -2366,15 +2369,28 @@ test.describe.serial('Production Smoke Tests', () => {
     const bypass = page.locator('[data-testid="assist-bypass-toggle"]')
     if (!(await bypass.isChecked())) await bypass.check()
 
-    await sendAssistMessage(page,
-      'Use the navigate tool to take me to the Atlas page at /map.')
+    // Getting the model to CALL the tool is the precondition, not the thing
+    // under test — and the non-prod agent is a 1.7B, which ignores the
+    // instruction often enough to fail a single-shot ask (it did on run
+    // #962, having passed on #958). Asking again is honest here: what this
+    // test exists to prove is that a navigate call reaches the panel as a
+    // question, not that a small model is obedient. Three attempts, then a
+    // real failure.
+    const ask = page.locator('[data-testid="assist-nav"]').last()
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await sendAssistMessage(page,
+        'Call the navigate tool with path "/map" to take me to the Atlas. ' +
+        'Use the tool — do not just describe it.', 120_000)
+      if (await ask.isVisible().catch(() => false)) break
+      expect(attempt, 'the assistant never called navigate in 3 attempts')
+        .toBeLessThan(3)
+    }
 
     // Two halves of the same bug. The panel must ASK — and until it is
     // answered the user must still be where they were. Before the fix the
     // production executor dropped the navigate event entirely, so the
     // assistant said it had navigated and nothing happened; the naive fix
     // would then move people mid-task without asking.
-    const ask = page.locator('[data-testid="assist-nav"]').last()
     await expect(ask).toBeVisible({ timeout: 30_000 })
     expect(page.url()).not.toContain('/map')
 
