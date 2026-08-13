@@ -2357,19 +2357,25 @@ test.describe.serial('Production Smoke Tests', () => {
     await uiLogin(page)
 
     // Start somewhere that is not the destination.
-    // Start from an empty conversation. The panel keys anonymous turns to
-    // one shared "global" thread, so by the time this test runs the history
-    // is dozens of messages deep — and every one of them is re-sent as
-    // context to a 1.7B, which is how a single short tool call ended up
-    // exceeding a 120s deadline (28 messages, run #970). Clearing it makes
-    // the turn short, which is the actual fix; a bigger timeout would only
-    // hide a conversation growing without bound.
-    const clearToken = await freshAccessToken(page)
-    await page.request.delete('/capi/assist/conversations', {
-      headers: { Authorization: `Bearer ${clearToken}` },
-    }).catch(() => {})
-
+    // This test gets its own story, and therefore its own conversation.
+    //
+    // The panel keys turns outside an article to one shared "global"
+    // thread, which by this point in the suite is dozens of messages deep —
+    // all re-sent as context to a 1.7B, which is how a single short tool
+    // call blew a 120s deadline (28 messages, run #970).
+    //
+    // The first attempt at fixing that deleted every conversation the user
+    // had. It worked here and broke ASSIST-23 twice in a row: that test
+    // leans on the tool-use precedent accumulated in its own report thread,
+    // and wiping the lot took it away. A fresh story is short by
+    // construction and touches nobody else's history.
     await page.goto('/my-stories')
+    await page.click('[data-testid="create-btn"]')
+    await page.click('[data-testid="new-story-btn"]')
+    await page.waitForURL(/\/stories\/.*\/edit/, { timeout: 15_000 })
+    const navStoryId = page.url().match(/\/stories\/([^/]+)\/edit/)?.[1]
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+
     await page.click('[data-testid="assist-toggle"]')
     await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
@@ -2407,6 +2413,14 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.locator('[data-testid="assist-nav-go"]').last().click()
     await page.waitForURL(/\/map/, { timeout: 15_000 })
     expect(page.url()).toContain('/map')
+
+    // Don't accumulate a story per run.
+    if (navStoryId) {
+      const token = await freshAccessToken(page)
+      await page.request.delete(`/capi/stories/${navStoryId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {})
+    }
   })
 
   test('ASSIST-23: Assistant grounds numeric claims in actual graph data', async ({ page }) => {
