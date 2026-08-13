@@ -360,6 +360,30 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="login-submit"]')).toBeVisible()
   })
 
+  test('AUTH-GSI: Google Identity loads on the login page and nowhere else', async ({ page }) => {
+    // The script used to sit in index.html, so Google's code ran on every
+    // page of the app — including authenticated ones showing other people's
+    // data. DAST saw cross-domain script inclusion on 41 pages and missing
+    // SRI on 52; the objection that matters is the DOM access.
+    //
+    // Asserted on OUR injection, not on Google's button rendering: whether
+    // accounts.google.com is reachable from a given environment is not
+    // something this suite should gate on, and the scoping is the part we
+    // own. SRI is deliberately absent — Google serves that URL mutably and
+    // publishes no hash, so pinning one would turn their next update into a
+    // sign-in outage.
+    const gsi = 'script[src*="accounts.google.com/gsi/client"]'
+
+    await clearSession(page)
+    await expect(page.locator('[data-testid="login-email"]')).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator(gsi)).toHaveCount(1, { timeout: 10_000 })
+
+    // Any other page must not pull it in.
+    await page.goto('/about')
+    await expect(page.locator('[data-testid="login-email"]')).toHaveCount(0)
+    await expect(page.locator(gsi)).toHaveCount(0)
+  })
+
   test('AUTH-02: Login with test credentials', async ({ page }) => {
     // Exercise the real login flow (clear the preloaded session first).
     await clearSession(page)
