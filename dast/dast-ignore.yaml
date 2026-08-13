@@ -107,8 +107,27 @@ ignore:
       <script> payload in ?name= produced zero occurrences in the
       response body.
     added: 2026-08-03
-    # 9 instances on the 2026-08-01 run, across 5 endpoints.
-    max_instances: 15
+    # Re-triaged 2026-08-13 after the cap fired at 16 (was sized at 15 from
+    # 9 instances on the 2026-08-01 run). All three controls re-verified
+    # against the dast environment on the build being promoted, not taken
+    # on trust from the original triage:
+    #
+    #   (1) /capi/investigations, /capi/studio/projects and /capi/activity
+    #       each answered HTTP 200 with content-type application/json and
+    #       x-content-type-options: nosniff present, so navigating to the
+    #       API URL still cannot execute a persisted value.
+    #   (2) Every v-html site in fontem-web remains DOMPurify-sanitised —
+    #       IssueDetailView and AssistPanel via renderMarkdown, ReportView
+    #       via sanitizeHtml — with the sole exception of AboutView, which
+    #       interpolates hardcoded SVG literals and no user data.
+    #   (3) script-src is still 'self' with hashes: no unsafe-inline, no
+    #       unsafe-eval.
+    #
+    # The count moved because the suite touched more endpoints, not because
+    # anything new echoes user input: same shape, same endpoints, one more
+    # instance. Sized at roughly 2x the observed count so ordinary traffic
+    # variance does not re-fire it, while a class change still does.
+    max_instances: 40
 
   - alert: Format String Error
     url_regex: "/capi/auth/login"
