@@ -2326,6 +2326,39 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(responseText.length).toBeGreaterThan(80)
   })
 
+  test('ASSIST-NAV: navigation asks first, and accept-all does not answer for you', async ({ page }) => {
+    test.setTimeout(300_000)
+    test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
+    await uiLogin(page)
+
+    // Start somewhere that is not the destination.
+    await page.goto('/my-stories')
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+    // Accept-all ON deliberately. It governs proposed edits to an article
+    // the user is looking at; it is not consent to be moved to another
+    // page, and this test exists to keep those two separate.
+    const bypass = page.locator('[data-testid="assist-bypass-toggle"]')
+    if (!(await bypass.isChecked())) await bypass.check()
+
+    await sendAssistMessage(page,
+      'Use the navigate tool to take me to the Atlas page at /map.')
+
+    // Two halves of the same bug. The panel must ASK — and until it is
+    // answered the user must still be where they were. Before the fix the
+    // production executor dropped the navigate event entirely, so the
+    // assistant said it had navigated and nothing happened; the naive fix
+    // would then move people mid-task without asking.
+    const ask = page.locator('[data-testid="assist-nav"]').last()
+    await expect(ask).toBeVisible({ timeout: 30_000 })
+    expect(page.url()).not.toContain('/map')
+
+    await page.locator('[data-testid="assist-nav-go"]').last().click()
+    await page.waitForURL(/\/map/, { timeout: 15_000 })
+    expect(page.url()).toContain('/map')
+  })
+
   test('ASSIST-23: Assistant grounds numeric claims in actual graph data', async ({ page }) => {
     test.setTimeout(300_000)
     if (!storyId) test.skip()
