@@ -2488,6 +2488,103 @@ test.describe.serial('Production Smoke Tests', () => {
   // against it instead — with a coverage phrase from the data, not a bare
   // year-shaped regex that any hallucination satisfies.
 
+  test('ASSIST-HISTORY: the conversation records what the agent actually did', async ({ page }) => {
+    test.setTimeout(420_000)
+    test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
+    await uiLogin(page)
+
+    // Its own story, so the conversation is short by construction and this
+    // test reads only its own turns.
+    await page.goto('/my-stories')
+    await page.click('[data-testid="create-btn"]')
+    await page.click('[data-testid="new-story-btn"]')
+    await page.waitForURL(/\/stories\/.*\/edit/, { timeout: 15_000 })
+    const storyForHistory = page.url().match(/\/stories\/([^/]+)\/edit/)?.[1]
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+    // A prompt that cannot be answered without a tool. Two attempts: the
+    // non-prod agent is a 1.7B and the point here is the record it leaves,
+    // not its obedience.
+    const bubble = page.locator('[data-testid^="tool-call-"]')
+      .filter({ hasNot: page.locator('[data-testid="tool-call-body"]') })
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await sendAssistMessage(page,
+        'Search the GMR graph for Siemens AG using the search_entities tool.')
+      if (await bubble.first().isVisible().catch(() => false)) break
+      expect(attempt, 'the assistant never called a tool in 2 attempts').toBeLessThan(2)
+    }
+
+    // ── What the server kept ───────────────────────────────────
+    //
+    // Read through the API rather than the DOM: the panel could render a
+    // bubble from the live stream and store nothing, which is exactly the
+    // bug this guards. Tool calls used to exist only as SSE events.
+    const token = await freshAccessToken(page)
+    const conv = await page.request.get(
+      `/capi/assist/conversations/report:${storyForHistory}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    expect(conv.ok(), `conversation fetch failed: ${conv.status()}`).toBeTruthy()
+    const messages = (await conv.json()).messages || []
+
+    const roles = messages.map((m) => m.role)
+    expect(roles, `no user turn recorded: ${JSON.stringify(roles)}`).toContain('user')
+    expect(roles, `no tool call recorded: ${JSON.stringify(roles)}`).toContain('tool')
+
+    const toolRows = messages.filter((m) => m.role === 'tool')
+    const call = toolRows[0]
+    // The tool is named, and named by the id the model was offered.
+    expect(call.content).toMatch(/^mcp__gmr__/)
+    // The arguments are kept — this is what says whether it did what was asked.
+    expect(call.extras?.args, `no arguments recorded: ${JSON.stringify(call.extras)}`)
+      .toBeTruthy()
+    expect(Object.keys(call.extras.args).length).toBeGreaterThan(0)
+    // The result is deliberately NOT kept. A tool returning 90k of JSON would
+    // make the conversation store mostly tool output.
+    expect(call.extras).not.toHaveProperty('result')
+    expect(JSON.stringify(call.extras)).not.toContain('gmr_id')
+    // Its size is kept even though its body is not.
+    expect(call.extras).toHaveProperty('bytes')
+    // Addressable, so an activity entry can point at this exact call.
+    expect(call.id, 'the tool row has no id to link to').toBeTruthy()
+
+    // The answer records which model produced it. Every row in production
+    // was NULL before this.
+    const answers = messages.filter((m) => m.role === 'assistant')
+    if (answers.length) {
+      expect(answers[answers.length - 1].model,
+        'the assistant row does not say which model answered').toBeTruthy()
+    }
+
+    // The user turn carries a real token count, not the character estimate
+    // that the reconciliation silently failed to replace.
+    const asked = messages.filter((m) => m.role === 'user')
+    expect(asked[0].tokens_in).toBeGreaterThan(0)
+
+    // ── And it survives a reload ───────────────────────────────
+    await page.reload()
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 15_000 })
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+    await expect(bubble.first()).toBeVisible({ timeout: 15_000 })
+
+    // Expanded, a reloaded call shows its arguments and says the result was
+    // not kept — rather than an empty box that reads like it returned nothing.
+    await page.locator('.tool-head').first().click()
+    const body = page.locator('[data-testid="tool-call-body"]').first()
+    await expect(body).toBeVisible({ timeout: 5_000 })
+    await expect(body).toContainText(/not kept/i)
+
+    if (storyForHistory) {
+      await page.request.delete(`/capi/stories/${storyForHistory}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {})
+    }
+  })
+
   test('ASSIST-25: full assistant→edit→save→reload round-trip', async ({ page }) => {
     test.setTimeout(300_000)
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
