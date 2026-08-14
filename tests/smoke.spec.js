@@ -2488,7 +2488,7 @@ test.describe.serial('Production Smoke Tests', () => {
   // against it instead — with a coverage phrase from the data, not a bare
   // year-shaped regex that any hallucination satisfies.
 
-  test('ASSIST-ANON: a signed-out visitor gets the assistant, and only the small one', async ({ page, request }) => {
+  test('ASSIST-ANON: a signed-out visitor gets the assistant, and only the small one', async ({ browser, request }) => {
     // Deliberately does not depend on the model choosing to call navigate.
     // What is being tested is the contract the server offers a visitor with
     // no session, and that contract is observable without a single token:
@@ -2497,9 +2497,13 @@ test.describe.serial('Production Smoke Tests', () => {
     // the model instead.
     test.setTimeout(120_000)
 
-    // No uiLogin, and nothing in storage: this must be a genuine stranger.
-    await page.context().clearCookies()
-
+    // The `request` fixture is already anonymous for our purposes: the
+    // suite's storageState carries a session, but the token lives in
+    // localStorage and APIRequestContext replays only cookies. The `page`
+    // fixture is NOT — it loads that localStorage and is signed in, which
+    // is why the UI half below builds its own context instead. An earlier
+    // version of this test called clearCookies() and believed it; the
+    // model picker showing up against testing is what gave it away.
     const stream = await request.post('/capi/assist/chat/stream', {
       data: {
         message: 'what is on this site?',
@@ -2508,8 +2512,22 @@ test.describe.serial('Production Smoke Tests', () => {
       },
       timeout: 60_000,
     })
-    expect(stream.status(), 'a signed-out visitor must be served').toBe(200)
-    expect(stream.headers()['content-type']).toContain('text/event-stream')
+    // 429 is not a failure here, it is the other half of the same feature:
+    // the allowance is 20/hour per IP, and CI shares an address, so a
+    // re-run within the hour legitimately meets the limit. Both answers
+    // prove the anonymous path is wired; only a 401 or a 5xx would not.
+    // Everything below still runs — the length cap is checked BEFORE the
+    // rate limit (pinned by a unit test in fontem-community-api), and the
+    // UI half spends no allowance at all.
+    expect([200, 429],
+      'a signed-out visitor must be served, or told they have had their turn')
+      .toContain(stream.status())
+    if (stream.status() === 429) {
+      console.log('ASSIST-ANON: anonymous allowance already spent for this '
+        + 'address this hour; the stream body check is the one thing skipped.')
+    } else {
+      expect(stream.headers()['content-type']).toContain('text/event-stream')
+    }
 
     // The rest of the assistant still needs an account. If any of these
     // start answering, an unauthenticated caller has been handed either
@@ -2534,26 +2552,50 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(tooLong.status(), 'an over-long anonymous message must be refused').toBe(422)
     expect(JSON.stringify(await tooLong.json())).toContain('1000')
 
-    // And the panel is actually usable on a public page — the server half
-    // is no good if the UI hides the toggle behind a session.
-    await page.goto('/about')
-    await expect(page.locator('[data-testid="assist-toggle"]')).toBeVisible({ timeout: 15_000 })
-    await page.click('[data-testid="assist-toggle"]')
-    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 10_000 })
-    // No model picker without an account: /assist/models is refused, and the
-    // panel must simply not offer the control rather than render it empty.
-    await expect(page.locator('[data-testid="assist-model-select"]')).toHaveCount(0)
+    // A context of its own, and the storage explicitly emptied.
+    //
+    // `browser.newContext()` inherits the `use` block from
+    // playwright.config.js, storageState included — so a hand-built context
+    // is signed in exactly like the `page` fixture, and omitting the option
+    // does NOT opt out of it. Measured, not assumed: this context reported
+    // `gmr-token` in localStorage and a `fontem_refresh` cookie, and the
+    // panel duly rendered the model picker for a "signed-out" visitor.
+    // Passing an empty state is what makes it a stranger. baseURL and
+    // ignoreHTTPSErrors are repeated for the same inheritance reason in
+    // reverse — they are cheap to state and wrong to guess at.
+    const base = process.env.BASE_URL || 'https://fontem.testing.void42.internal'
+    const anon = await browser.newContext({
+      baseURL: base,
+      ignoreHTTPSErrors: /\.void42\.internal(\/|$|:)/.test(base),
+      storageState: { cookies: [], origins: [] },
+    })
+    try {
+      const page = await anon.newPage()
 
-    // The visitor is told why the assistant is smaller than it looks.
-    await expect(page.locator('[data-testid="assist-signed-out-notice"]'))
-      .toBeVisible({ timeout: 10_000 })
+      // The panel is usable on a public page — the server half is no good
+      // if the UI hides the toggle behind a session.
+      await page.goto('/about')
+      await expect(page.locator('[data-testid="assist-toggle"]')).toBeVisible({ timeout: 15_000 })
+      await page.click('[data-testid="assist-toggle"]')
+      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 10_000 })
 
-    // The input stops them before the server has to. Asserting the
-    // attribute rather than typing 1001 characters: maxlength is what the
-    // browser enforces, and a fill() that silently truncates would pass a
-    // length check while proving nothing.
-    await expect(page.locator('[data-testid="assist-input"]'))
-      .toHaveAttribute('maxlength', '1000')
+      // No model picker without an account: /assist/models is refused, and
+      // the panel must not offer the control rather than render it empty.
+      await expect(page.locator('[data-testid="assist-model-select"]')).toHaveCount(0)
+
+      // The visitor is told why the assistant is smaller than it looks.
+      await expect(page.locator('[data-testid="assist-signed-out-notice"]'))
+        .toBeVisible({ timeout: 10_000 })
+
+      // The input stops them before the server has to. Asserting the
+      // attribute rather than typing 1001 characters: maxlength is what the
+      // browser enforces, and a fill() that silently truncates would pass a
+      // length check while proving nothing.
+      await expect(page.locator('[data-testid="assist-input"]'))
+        .toHaveAttribute('maxlength', '1000')
+    } finally {
+      await anon.close()
+    }
   })
 
   test('ASSIST-HISTORY: the conversation records what the agent actually did', async ({ page }) => {
