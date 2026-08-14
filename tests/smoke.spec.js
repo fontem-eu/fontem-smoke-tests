@@ -2520,6 +2520,20 @@ test.describe.serial('Production Smoke Tests', () => {
       expect(resp.status(), `${path} must stay private`).toBe(401)
     }
 
+    // An over-long message is refused, and refused before the model is
+    // asked anything. 1000 is ANONYMOUS_MAX_PROMPT_CHARS in
+    // fontem-community-api; the panel mirrors it as its maxlength.
+    const tooLong = await request.post('/capi/assist/chat/stream', {
+      data: {
+        message: 'x'.repeat(1001),
+        conversation_key: `anon-smoke-long-${RUN_ID.slice(0, 8)}`,
+        context_block: '',
+      },
+      timeout: 30_000,
+    })
+    expect(tooLong.status(), 'an over-long anonymous message must be refused').toBe(422)
+    expect(JSON.stringify(await tooLong.json())).toContain('1000')
+
     // And the panel is actually usable on a public page — the server half
     // is no good if the UI hides the toggle behind a session.
     await page.goto('/about')
@@ -2529,6 +2543,17 @@ test.describe.serial('Production Smoke Tests', () => {
     // No model picker without an account: /assist/models is refused, and the
     // panel must simply not offer the control rather than render it empty.
     await expect(page.locator('[data-testid="assist-model-select"]')).toHaveCount(0)
+
+    // The visitor is told why the assistant is smaller than it looks.
+    await expect(page.locator('[data-testid="assist-signed-out-notice"]'))
+      .toBeVisible({ timeout: 10_000 })
+
+    // The input stops them before the server has to. Asserting the
+    // attribute rather than typing 1001 characters: maxlength is what the
+    // browser enforces, and a fill() that silently truncates would pass a
+    // length check while proving nothing.
+    await expect(page.locator('[data-testid="assist-input"]'))
+      .toHaveAttribute('maxlength', '1000')
   })
 
   test('ASSIST-HISTORY: the conversation records what the agent actually did', async ({ page }) => {
