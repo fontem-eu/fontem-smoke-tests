@@ -2488,6 +2488,49 @@ test.describe.serial('Production Smoke Tests', () => {
   // against it instead — with a coverage phrase from the data, not a bare
   // year-shaped regex that any hallucination satisfies.
 
+  test('ASSIST-ANON: a signed-out visitor gets the assistant, and only the small one', async ({ page, request }) => {
+    // Deliberately does not depend on the model choosing to call navigate.
+    // What is being tested is the contract the server offers a visitor with
+    // no session, and that contract is observable without a single token:
+    // the stream opens, and everything that would spend an account stays
+    // shut. Asserting on a 1.7B's tool choice would make this test measure
+    // the model instead.
+    test.setTimeout(120_000)
+
+    // No uiLogin, and nothing in storage: this must be a genuine stranger.
+    await page.context().clearCookies()
+
+    const stream = await request.post('/capi/assist/chat/stream', {
+      data: {
+        message: 'what is on this site?',
+        conversation_key: `anon-smoke-${RUN_ID.slice(0, 8)}`,
+        context_block: '',
+      },
+      timeout: 60_000,
+    })
+    expect(stream.status(), 'a signed-out visitor must be served').toBe(200)
+    expect(stream.headers()['content-type']).toContain('text/event-stream')
+
+    // The rest of the assistant still needs an account. If any of these
+    // start answering, an unauthenticated caller has been handed either
+    // someone's history or a way to spend their key.
+    for (const path of ['/capi/assist/usage', '/capi/assist/models',
+                        '/capi/assist/credentials']) {
+      const resp = await request.get(path, { timeout: 15_000 })
+      expect(resp.status(), `${path} must stay private`).toBe(401)
+    }
+
+    // And the panel is actually usable on a public page — the server half
+    // is no good if the UI hides the toggle behind a session.
+    await page.goto('/about')
+    await expect(page.locator('[data-testid="assist-toggle"]')).toBeVisible({ timeout: 15_000 })
+    await page.click('[data-testid="assist-toggle"]')
+    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 10_000 })
+    // No model picker without an account: /assist/models is refused, and the
+    // panel must simply not offer the control rather than render it empty.
+    await expect(page.locator('[data-testid="assist-model-select"]')).toHaveCount(0)
+  })
+
   test('ASSIST-HISTORY: the conversation records what the agent actually did', async ({ page }) => {
     test.setTimeout(420_000)
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
