@@ -91,7 +91,15 @@ test.describe('Article translations', () => {
     expect(probe.status, JSON.stringify(probe.body)).toBe(201)
     sid = probe.body.id
     const hasTranslations = await api(request, tok, 'GET', `/data-stories/${sid}/translations`)
-    test.skip(hasTranslations.status !== 200, 'translations API not deployed here')
+    // Skip ONLY for the thing the skip claims: a 404 means the endpoint is
+    // not deployed here. Anything else — 401, 429, 500 — is a failure that
+    // was being reported as "not deployed", which is a guess dressed up as
+    // a fact. This test skipped silently on a local run while failing in
+    // CI, and the message gave no way to tell those apart.
+    test.skip(hasTranslations.status === 404, 'translations API not deployed here')
+    expect(hasTranslations.status,
+      `translations probe: HTTP ${hasTranslations.status} `
+      + `${JSON.stringify(hasTranslations.body).slice(0, 200)}`).toBe(200)
 
     await api(request, tok, 'PUT', `/data-stories/${sid}/content`, doc(EN_BODY))
     const put = await api(request, tok, 'PUT', `/data-stories/${sid}/translations/pt`, {

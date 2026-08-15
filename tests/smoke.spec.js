@@ -165,11 +165,16 @@ test.describe.serial('Production Smoke Tests', () => {
     await uiLogin(page)
     const seedTag = `smoke-${RUN_ID.slice(-8)}`
     const token = await freshAccessToken(page)
-    const seededId = await page.evaluate(async ({ tag, tok }) => {
+    const seeded = await page.evaluate(async ({ tag, tok }) => {
       // POST /data-stories accepts only title/abstract/parent_id — the
       // visibility lives on the PUT update endpoint. So we create
       // private, flip to public_open, then attach the tag.
-      const create = await fetch('/capi/data-stories', {
+      // One retry on the "not now" statuses. The suite fires a lot of
+      // requests from a single address, so a seeding POST can land in a
+      // spent bucket through nobody's fault — and a seed that fails takes
+      // the whole test with it. Retried here rather than in the app,
+      // because the app must NOT retry a create: that makes two stories.
+      const post = async () => fetch('/capi/data-stories', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
         body: JSON.stringify({
@@ -177,7 +182,19 @@ test.describe.serial('Production Smoke Tests', () => {
           abstract: 'Self-seeded story so FEED-TAG-PERSIST has something to filter.',
         }),
       })
-      if (!create.ok) return null
+      let create = await post()
+      if ([408, 429, 502, 503, 504].includes(create.status)) {
+        await new Promise((r) => setTimeout(r, 800))
+        create = await post()
+      }
+      // Say WHY, rather than handing back a null the assertion cannot
+      // explain. FEED-TAG-PERSIST failed the gate as "seeded story id:
+      // Received null" — which could have been auth, a rate limit or a
+      // 500, and the test had thrown all three away.
+      if (!create.ok) {
+        return { error: `create -> HTTP ${create.status}: `
+          + (await create.text().catch(() => '')).slice(0, 200) }
+      }
       const story = await create.json()
       const id = story.id
       await fetch(`/capi/data-stories/${id}`, {
@@ -194,9 +211,11 @@ test.describe.serial('Production Smoke Tests', () => {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
         body: JSON.stringify({ tags: [tag] }),
       })
-      return id
+      return { id }
     }, { tag: seedTag, tok: token })
-    expect(seededId, 'seeded story id').toBeTruthy()
+    expect(seeded?.id, `seeding failed: ${seeded?.error || 'no id returned'}`)
+      .toBeTruthy()
+    const seededId = seeded.id
     await demoMark(page, `FEED-TAG-PERSIST — seeded "#${seedTag}" tag`)
 
     // Navigate to the feed with no ?tag= query.
@@ -330,7 +349,13 @@ test.describe.serial('Production Smoke Tests', () => {
       // the shared store, which holds the full 1949-2026 CELLAR mirror
       // (measured: 504 at 60.1s). Both mean "backend said no, and the UI
       // surfaced it"; a bare 500 still fails.
-      expect(detail).toMatch(/Virtuoso|timed out|timeout|SPARQL|HTTP 50[34]/i)
+      // 429 is here now, and it means something specific: the editor
+      // retried three times with backoff (src/api/retry.js) and the
+      // address is STILL being limited. That is a statement about the
+      // environment's capacity, not about the editor — and this test's
+      // subject is whether the editor surfaces a backend refusal legibly.
+      // A bare 500 still fails, which is the point of pinning at all.
+      expect(detail).toMatch(/Virtuoso|timed out|timeout|SPARQL|HTTP 50[34]|429|Too Many/i)
       await demoMark(page, `Backend error surfaced: ${detail.slice(0, 60)}…`, 2500)
     } else {
       await expect(page.locator('[data-testid="sparql-results"] thead th').first()).toBeVisible()
