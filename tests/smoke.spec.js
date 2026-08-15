@@ -2578,6 +2578,17 @@ test.describe.serial('Production Smoke Tests', () => {
   // against it instead — with a coverage phrase from the data, not a bare
   // year-shaped regex that any hallucination satisfies.
 
+  test('ASSIST-MOCK-PRIVATE: the scripted model is not reachable from outside', async ({ request }) => {
+    // It is mounted in testing and staging, unauthenticated, and its only
+    // legitimate caller is the community-api pod talking to itself. /capi/
+    // proxies that service, so without an explicit block the endpoint
+    // answers on the public host — it did, before nginx.conf grew one.
+    for (const path of ['/capi/mock-llm/v1/chat/completions', '/capi/mock-llm/v1/models']) {
+      const resp = await request.post(path, { data: {}, timeout: 15_000 })
+      expect(resp.status(), `${path} must not be reachable from outside`).toBe(404)
+    }
+  })
+
   test('ASSIST-ANON: a signed-out visitor gets the assistant, and only the small one', async ({ browser, request }) => {
     // Deliberately does not depend on the model choosing to call navigate.
     // What is being tested is the contract the server offers a visitor with
