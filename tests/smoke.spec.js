@@ -2423,50 +2423,140 @@ test.describe.serial('Production Smoke Tests', () => {
     }
   })
 
-  test('ASSIST-23: Assistant grounds numeric claims in actual graph data', async ({ page }) => {
+  // ASSIST-23 runs on the scripted model, not the 1.7B. Every other
+  // assistant test in this file still drives the real one — this replaces
+  // the model for one test, not the coverage.
+  //
+  // Why: the assertion is that a numeric claim is grounded, which needs
+  // search_entities and then investigate_entity with the id the search
+  // returned. Non-prod serves only qwen3-1.7b (production defaults to the
+  // 4B), and the 1.7B skips the search often enough that the test was a coin
+  // toss — it failed the promote gate by answering about "EMENS", and passed
+  // the run before by luck. A gate that flips on model mood tells you
+  // nothing about the platform.
+  //
+  // The mock is not a recording: it reads the real tool results out of the
+  // conversation and derives each next call from them. If search_entities
+  // stops returning a usable id, or investigate_entity stops reporting a
+  // count, this test still fails — which is the whole reason to run it
+  // against a deployed environment rather than in a unit test.
+  test('ASSIST-23: the tool chain runs, in order, on real data', async ({ page }) => {
     test.setTimeout(300_000)
     if (!storyId) test.skip()
-    test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
+
+    // Select the scripted model for this user, and put it back afterwards —
+    // the suite shares one account, so leaving it set would silently move
+    // every later assistant test onto the mock.
+    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const pick = async (id) => page.request.put('/capi/assist/models', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { model_id: id },
+    })
+    const chose = await pick('mock-e2e')
+    test.skip(chose.status() === 422,
+      'scripted model not enabled here (assistMockModel unset)')
+    expect(chose.ok(), `could not select the scripted model: ${chose.status()}`).toBeTruthy()
+
+    try {
+      await runToolChain(page)
+    } finally {
+      // Back to the environment default whatever happened above.
+      await pick('qwen3-1.7b')
+    }
+  })
+
+  async function runToolChain(page) {
     await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
     await page.click('[data-testid="assist-toggle"]')
     await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
 
-    // Asking for a count means the model has to pick the
-    // `investigate_entity` tool, read the contract list, and quote a
-    // concrete number. Pre-revamp the model would say "many" or "several"
-    // because get_contracts wasn't always picked.
     const responseText = await sendAssistMessage(
       page,
-      'How many EU public procurement contracts do we have for Siemens AG ' +
-      'in the GMR graph? Give me the exact count and name the company in ' +
-      'your answer.',
+      'E2E-SCENARIO: toolchain — how many EU public procurement contracts '
+      + 'does Siemens AG have in the graph?',
     )
-    // PRIMARY guard (the actual regression): a concrete number must
-    // appear. Pre-revamp the model hand-waved "many"/"several"/"thousands"
-    // with no figure; the investigate_entity tool now forces a count.
-    expect(
-      responseText,
-      `Numeric-grounding response had no digits: "${responseText.slice(0, 300)}…"`,
-    ).toMatch(/\d/)
-    // Anti-hallucination, phrasing-tolerant. The assistant on staging is
-    // Mistral, which legitimately answers "28" to "give me the exact
-    // count" — a bare figure is a direct reply to a question that already
-    // named Siemens, so it cannot be a number for some *other* entity.
-    // Accept that as grounded; only a LONG answer that never names the
-    // subject is suspect (could be a confabulation about something else).
-    // This replaces a hard /siemens|contract/ match that false-failed on
-    // correct terse answers and made the test flaky.
-    const lc = responseText.toLowerCase()
-    const namesSubject = /siemens|contract|procurement|ted|graph/.test(lc)
-    const terseNumeric = responseText.trim().length <= 40
-    expect(
-      namesSubject || terseNumeric,
-      `numeric answer was neither on-topic nor a terse count: "${responseText.slice(0, 300)}…"`,
-    ).toBe(true)
-  })
+
+    // The script says so, so anything else is a broken tool rather than a
+    // model having an off day. MOCK-FAIL is what the script answers when a
+    // tool gave it nothing usable — surfaced with the raw payload attached.
+    expect(responseText, `the tool chain broke: "${responseText.slice(0, 300)}…"`)
+      .not.toContain('MOCK-FAIL')
+    expect(responseText, `no count in the answer: "${responseText.slice(0, 300)}…"`)
+      .toMatch(/\d/)
+    expect(responseText).toContain('Siemens AG')
+
+    // The answer names the entity investigate_entity was actually called
+    // with — the id came out of search_entities, so this is the join
+    // between the two tools holding.
+    const idInAnswer = responseText.match(/entity ([0-9a-f-]{8,})/i)?.[1]
+    expect(idInAnswer, `the answer cited no entity id: "${responseText.slice(0, 200)}…"`)
+      .toBeTruthy()
+
+    // navigate ran, which means the panel asked for consent rather than
+    // moving the page — the regression that started this whole thread was
+    // the assistant announcing a navigation that never happened.
+    const navPrompt = page.locator('[data-testid="assist-nav"]')
+    await expect(navPrompt, 'navigate did not ask before moving the user')
+      .toBeVisible({ timeout: 15_000 })
+    await page.click('[data-testid="assist-nav-stay"]')
+    await expect(page).toHaveURL(/\/stories\/.*\/edit/)
+
+    // The conversation is the record of what the agent did. Every call the
+    // script makes must be there, in order, with its arguments — this is
+    // the part a 1.7B could never make assertable.
+    const conv = await page.request.get(
+      `/capi/assist/conversations/report:${storyId}`,
+      { headers: { Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('gmr-token'))}` } },
+    )
+    expect(conv.ok(), `conversation fetch failed: ${conv.status()}`).toBeTruthy()
+    const messages = (await conv.json()).messages || []
+    // A tool row stores the call's NAME as its content and the arguments in
+    // extras; the result is deliberately never stored.
+    const toolRows = messages.filter((m) => m.role === 'tool')
+    const called = toolRows.map((m) => m.content)
+
+    for (const name of ['mcp__gmr__search_entities', 'mcp__gmr__investigate_entity',
+      'get_doc', 'navigate']) {
+      expect(called, `${name} missing from ${JSON.stringify(called)}`).toContain(name)
+    }
+    // Order matters: investigating before searching would mean the id was
+    // invented rather than looked up.
+    expect(called.indexOf('mcp__gmr__search_entities'))
+      .toBeLessThan(called.indexOf('mcp__gmr__investigate_entity'))
+
+    // And the arguments, not just the names — "the agent called
+    // investigate_entity" is worth little without which entity.
+    const investigate = toolRows.find((m) => m.content === 'mcp__gmr__investigate_entity')
+    const investigatedId = investigate?.extras?.args?.entity_id
+    expect(investigatedId,
+      `no entity_id recorded: ${JSON.stringify(investigate?.extras)}`).toBeTruthy()
+    expect(investigatedId, 'the answer cited a different entity than was investigated')
+      .toBe(idInAnswer)
+
+    const searched = toolRows.find((m) => m.content === 'mcp__gmr__search_entities')
+    expect(searched?.extras?.args?.query,
+      `no query recorded for the search: ${JSON.stringify(searched?.extras)}`)
+      .toBe('Siemens AG')
+
+    // The same turn, read back through the provenance endpoint — the view
+    // the activity log links to. It must tell the same story: the prompt
+    // that caused it, and every call in order.
+    const prov = await page.request.get(
+      `/capi/assist/provenance/${investigate.id}`,
+      { headers: { Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('gmr-token'))}` } },
+    )
+    expect(prov.ok(), `provenance fetch failed: ${prov.status()}`).toBeTruthy()
+    const body = await prov.json()
+    expect(body.prompt?.content, 'provenance lost the prompt').toContain('E2E-SCENARIO')
+    expect((body.calls || []).map((c) => c.tool))
+      .toEqual(expect.arrayContaining(['mcp__gmr__search_entities',
+        'mcp__gmr__investigate_entity', 'get_doc', 'navigate']))
+    expect(body.calls.find((c) => c.is_subject)?.id,
+      'provenance did not mark the call it was asked about').toBe(investigate.id)
+  }
 
   // ASSIST-24 removed 2026-08-09.
   //
@@ -2487,6 +2577,17 @@ test.describe.serial('Production Smoke Tests', () => {
   // registries and carries per-source coverage text. Once that ships, assert
   // against it instead — with a coverage phrase from the data, not a bare
   // year-shaped regex that any hallucination satisfies.
+
+  test('ASSIST-MOCK-PRIVATE: the scripted model is not reachable from outside', async ({ request }) => {
+    // It is mounted in testing and staging, unauthenticated, and its only
+    // legitimate caller is the community-api pod talking to itself. /capi/
+    // proxies that service, so without an explicit block the endpoint
+    // answers on the public host — it did, before nginx.conf grew one.
+    for (const path of ['/capi/mock-llm/v1/chat/completions', '/capi/mock-llm/v1/models']) {
+      const resp = await request.post(path, { data: {}, timeout: 15_000 })
+      expect(resp.status(), `${path} must not be reachable from outside`).toBe(404)
+    }
+  })
 
   test('ASSIST-ANON: a signed-out visitor gets the assistant, and only the small one', async ({ browser, request }) => {
     // Deliberately does not depend on the model choosing to call navigate.
