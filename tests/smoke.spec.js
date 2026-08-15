@@ -332,9 +332,14 @@ test.describe.serial('Production Smoke Tests', () => {
     // outcomes — slow-but-valid 200 and the API timeout 504 — so the
     // test passes on environments with real data without inviting
     // indefinite hangs.
+    // Three outcomes, all legitimate: rows, an explicit "matched nothing",
+    // or a surfaced backend error. Waiting only for the first two is what
+    // hung this test for 65s when the seeded query returned an empty
+    // answer and the page rendered neither.
     await runBtn.click()
     await Promise.race([
       page.locator('[data-testid="sparql-results"]').waitFor({ timeout: 65_000 }),
+      page.locator('[data-testid="sparql-empty"]').waitFor({ timeout: 65_000 }),
       page.locator('[data-testid="sparql-error"]').waitFor({ timeout: 65_000 }),
     ])
     await expect(runBtn).toBeEnabled({ timeout: 5_000 })
@@ -357,6 +362,10 @@ test.describe.serial('Production Smoke Tests', () => {
       // A bare 500 still fails, which is the point of pinning at all.
       expect(detail).toMatch(/Virtuoso|timed out|timeout|SPARQL|HTTP 50[34]|429|Too Many/i)
       await demoMark(page, `Backend error surfaced: ${detail.slice(0, 60)}…`, 2500)
+    } else if (await page.locator('[data-testid="sparql-empty"]').isVisible().catch(() => false)) {
+      // The store answered and matched nothing. A real result, and the
+      // editor says so rather than showing a blank panel.
+      await demoMark(page, 'Query ran — no rows ✓', 2000)
     } else {
       await expect(page.locator('[data-testid="sparql-results"] thead th').first()).toBeVisible()
       await demoMark(page, 'Query results rendered ✓', 2500)
