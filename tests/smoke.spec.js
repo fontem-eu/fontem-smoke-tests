@@ -2547,9 +2547,20 @@ test.describe.serial('Production Smoke Tests', () => {
     )
     expect(conv.ok(), `conversation fetch failed: ${conv.status()}`).toBeTruthy()
     const messages = (await conv.json()).messages || []
+    // THIS turn's rows, not the whole conversation.
+    //
+    // The conversation is keyed to the story, and other assistant tests
+    // add their own tool calls to it. Asserting order across the lot
+    // passed in isolation and failed in the full suite, where
+    // search_entities showed up at index 4 behind someone else's calls —
+    // a test reading another test's history and calling it a bug.
+    const turnStart = messages.map((m) => m.role === 'user'
+      && (m.content || '').includes('E2E-SCENARIO')).lastIndexOf(true)
+    expect(turnStart, 'could not find this turn in the conversation')
+      .toBeGreaterThan(-1)
     // A tool row stores the call's NAME as its content and the arguments in
     // extras; the result is deliberately never stored.
-    const toolRows = messages.filter((m) => m.role === 'tool')
+    const toolRows = messages.slice(turnStart).filter((m) => m.role === 'tool')
     const called = toolRows.map((m) => m.content)
 
     for (const name of ['mcp__gmr__search_entities', 'mcp__gmr__investigate_entity',
