@@ -16,9 +16,9 @@
 # the staging one had never completed successfully, so the whole
 # arrangement gated nothing.
 #
-# Rendered by the gitops promote workflows by substituting exactly four
-# placeholders — E2E_NAMESPACE, E2E_ENV, E2E_BASE_URL, E2E_IMAGE_TAG —
-# with sed. Deliberately sed and not envsubst: gettext is not guaranteed
+# Rendered by the gitops promote workflows by substituting exactly five
+# placeholders — E2E_NAMESPACE, E2E_ENV, E2E_BASE_URL, E2E_IMAGE_TAG and
+# E2E_CAPI_TAG — with sed. Deliberately sed and not envsubst: gettext is not guaranteed
 # on the act_runner image, and a bare `envsubst` would additionally eat
 # any legitimate $VAR in the container spec.
 apiVersion: batch/v1
@@ -82,6 +82,46 @@ spec:
                       values: ["llama-server", "llama-server-nonprod"]
       imagePullSecrets:
         - name: regcred
+      volumes:
+        # The fixture script lives in the smoke-tests image but has to run in
+        # the community-api one (which owns the feed runner and the jwt
+        # library). Copying it across is cheaper than duplicating the script
+        # into two repos and letting the copies drift.
+        - name: fixtures
+          emptyDir: {}
+      initContainers:
+        # 1. Lift the fixture out of the smoke image.
+        - name: stage-fixture
+          image: contribute.void42.internal/fontem/fontem-smoke-tests:${E2E_IMAGE_TAG}
+          command: ["sh", "-c", "cp /app/fixtures/seed_e2e_briefings.py /fixtures/"]
+          volumeMounts:
+            - { name: fixtures, mountPath: /fixtures }
+        # 2. Seed the synthetic briefing, re-validate every published query,
+        #    and materialise — so the browser is not racing a 6-hourly
+        #    CronJob for something to read. A real query that has quietly
+        #    stopped matching the graph fails the gate HERE, with the name of
+        #    the check that broke, rather than showing up later as an empty
+        #    feed that looks like a quiet week.
+        - name: seed-briefings
+          image: contribute.void42.internal/fontem/fontem-community-api:${E2E_CAPI_TAG}
+          command: ["python", "/fixtures/seed_e2e_briefings.py"]
+          env:
+            - name: CAPI_URL
+              value: "http://fontem-community-api:8001"
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: fontem-jwt-secret, key: JWT_SECRET } }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: fontem-postgres-credentials, key: POSTGRES_PASSWORD }
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://postgres:$(POSTGRES_PASSWORD)@postgresql:5432/gmr_app"
+            - name: GMR_API_INTERNAL
+              value: "http://fontem-api"
+          volumeMounts:
+            - { name: fixtures, mountPath: /fixtures }
+          resources:
+            requests: { memory: "256Mi", cpu: "100m" }
+            limits: { memory: "1Gi", cpu: "1000m" }
       containers:
         - name: e2e
           image: contribute.void42.internal/fontem/fontem-smoke-tests:${E2E_IMAGE_TAG}
