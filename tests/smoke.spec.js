@@ -139,9 +139,12 @@ test.describe.serial('Production Smoke Tests', () => {
     )
     const mapIdx = navHrefs.indexOf('/map')
     const explIdx = navHrefs.indexOf('/explore')
+    const dashIdx = navHrefs.indexOf('/data-quality')
     expect(explIdx).toBeGreaterThanOrEqual(0)
-    expect(mapIdx).toBe(explIdx + 1)
-    await demoMark(page, 'Explore leads the data group, Atlas next ✓', 2000)
+    // data group order: Explore → Dashboards → Atlas/Map (fontem-web #376)
+    expect(dashIdx).toBe(explIdx + 1)
+    expect(mapIdx).toBe(explIdx + 2)
+    await demoMark(page, 'Explore → Dashboards → Atlas order ✓', 2000)
 
     // Click into the hub — the Data Quality card lands on /data-quality.
     await explore.click()
