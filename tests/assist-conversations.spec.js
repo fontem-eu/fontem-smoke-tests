@@ -56,6 +56,64 @@ async function openSwitcher(page) {
   await expect(page.locator('[data-testid="assist-conversation-list"]')).toBeVisible()
 }
 
+/** The row for a chat with this exact name. */
+function rowByName(page, name) {
+  return page.locator('[data-testid="assist-conversation-row"]').filter({ hasText: name })
+}
+
+/**
+ * Start a chat and name it, returning the name.
+ *
+ * Everything downstream keys off the name rather than a row index or a
+ * total count. The suite shares one signed-in account, so the list carries
+ * every chat every previous run created — counting rows asserts on other
+ * runs' leftovers, and reading `.first()` picks whichever chat happens to
+ * sort first. Both read as product bugs when they break.
+ */
+async function createNamedChat(page, name) {
+  await page.locator('[data-testid="assist-new-conversation"]').click()
+  await openSwitcher(page)
+  await page.locator('[data-testid="assist-conversation-rename"]').first().click()
+  const input = page.locator('[data-testid="assist-conversation-rename-input"]')
+  await input.fill(name)
+  await input.press('Enter')
+  await expect(rowByName(page, name)).toHaveCount(1)
+  return name
+}
+
+/**
+ * Delete the empty chats these tests leave behind.
+ *
+ * The suite signs in as one shared account, and every "new chat" click adds
+ * a row that nothing removed. That reached 80 rows and started breaking
+ * assertions — the list was still rendering when a count was taken. Teardown
+ * goes through the API for the same reason registration does: it is not the
+ * behaviour under test, and driving 80 deletes through the UI would dominate
+ * the suite's runtime.
+ *
+ * Only message-less chats are removed. A conversation someone actually used
+ * has messages, so this cannot touch real history.
+ */
+async function purgeEmptyChats(request) {
+  const auth = { Authorization: `Bearer ${ownerToken()}` }
+  const listed = await request.get('/capi/assist/conversations', { headers: auth })
+  if (!listed.ok()) return 0
+  const empty = (await listed.json()).conversations.filter((c) => c.message_count === 0)
+  let removed = 0
+  for (const c of empty) {
+    const r = await request.delete(
+      `/capi/assist/conversations/${encodeURIComponent(c.conversation_key)}`,
+      { headers: auth },
+    )
+    if (r.ok()) removed += 1
+  }
+  return removed
+}
+
+test.afterAll(async ({ request }) => {
+  await purgeEmptyChats(request)
+})
+
 test.describe('Assistant chat tabs', () => {
   test('CHAT-TABS-01: a signed-in user gets a conversation switcher', async ({ page }) => {
     await openAssistant(page)
@@ -72,23 +130,23 @@ test.describe('Assistant chat tabs', () => {
     await expect(page.locator('[data-testid="assist-conversation-row"]').first()).toBeVisible()
   })
 
-  test('CHAT-TABS-03: a chat can be renamed, and the name sticks', async ({ page }) => {
+  test('CHAT-TABS-03: a chat can be renamed, and the name sticks', async ({ page }, testInfo) => {
     await openAssistant(page)
     await page.locator('[data-testid="assist-new-conversation"]').click()
     await openSwitcher(page)
 
-    const name = `Renamed ${RUN}`
+    const name = `Renamed ${RUN}-${testInfo.retry}`
     await page.locator('[data-testid="assist-conversation-rename"]').first().click()
     const input = page.locator('[data-testid="assist-conversation-rename-input"]')
     await input.fill(name)
     await input.press('Enter')
-    await expect(page.locator('[data-testid="assist-conversation-list"]')).toContainText(name)
+    await expect(rowByName(page, name)).toHaveCount(1)
 
     // Survives a reload: the name is on the server, not in component state.
     await page.reload()
     await page.locator('[data-testid="assist-toggle"]').click()
     await openSwitcher(page)
-    await expect(page.locator('[data-testid="assist-conversation-list"]')).toContainText(name)
+    await expect(rowByName(page, name)).toHaveCount(1)
   })
 
   test('CHAT-TABS-04: switching chats does not carry the other one with it', async ({ page }) => {
@@ -107,16 +165,19 @@ test.describe('Assistant chat tabs', () => {
     expect(after).not.toBe(`${before}${before}`)   // not appended onto the old one
   })
 
-  test('CHAT-TABS-05: deleting a chat removes it from the switcher', async ({ page }) => {
+  test('CHAT-TABS-05: deleting a chat removes it from the switcher', async ({ page }, testInfo) => {
+    // Asserts on the named row, not on a total. `toHaveCount(before - 1)`
+    // read the count while the list was still rendering, compared it against
+    // the fully rendered list, and failed on a race that had nothing to do
+    // with deleting.
     await openAssistant(page)
-    await page.locator('[data-testid="assist-new-conversation"]').click()
-    await openSwitcher(page)
-    const rows = page.locator('[data-testid="assist-conversation-row"]')
-    const before = await rows.count()
-    expect(before).toBeGreaterThan(0)
+    const name = await createNamedChat(page, `Doomed ${RUN}-${testInfo.retry}`)
 
-    await page.locator('[data-testid="assist-conversation-delete"]').first().click()
-    await expect(rows).toHaveCount(before - 1)
+    await rowByName(page, name)
+      .locator('[data-testid="assist-conversation-delete"]')
+      .click()
+
+    await expect(rowByName(page, name)).toHaveCount(0)
   })
 
   test('CHAT-TABS-06: a signed-out visitor gets no switcher', async ({ browser }) => {
@@ -193,12 +254,22 @@ test.describe('Assistant chat isolation — deliberate cross-user attacks', () =
     expect(keys).toContain(victimKey)
   })
 
-  test('CHAT-ISO-02: none of your chat content reaches the attacker', async ({ request }, testInfo) => {
+  test('CHAT-ISO-02: none of your chat content reaches the attacker', async ({ page, request }, testInfo) => {
     // Deliberately NOT asserting that the two key sets are disjoint. The
     // keyspace is per-user on purpose — `report:<uuid>` is the same string
     // for everyone reading that report, and two people discussing it are
     // meant to get one conversation each, not to collide. Overlapping keys
     // are the design; overlapping *content* would be the breach.
+    //
+    // The owner's chat is created here rather than inherited from whatever
+    // an earlier test left behind. Depending on ambient state made this fail
+    // when run alone, and worse, it meant the probes below were reading
+    // conversations that were empty anyway — "no messages leaked" is not
+    // worth much when there was nothing to leak.
+    await openAssistant(page)
+    const secret = `Confidential ${RUN}-${testInfo.retry}`
+    await createNamedChat(page, secret)
+
     // A distinct persona per attempt. Reusing one across a retry would carry
     // the previous attempt's probe rows into the "fresh persona" assertion
     // below and fail for a reason that has nothing to do with isolation.
@@ -211,31 +282,41 @@ test.describe('Assistant chat isolation — deliberate cross-user attacks', () =
       headers: { Authorization: `Bearer ${ownerToken()}` },
     })
     const myConvs = (await mine.json()).conversations
-    expect(myConvs.length).toBeGreaterThan(0)
-
-    const theirs = await request.get('/capi/assist/conversations', { headers: auth })
-    const theirConvs = (await theirs.json()).conversations
+    const owned = myConvs.find((c) => c.title === secret)
+    expect(owned, 'the owner should hold the chat just created').toBeTruthy()
 
     // A fresh persona has no chats at all, so nothing of the owner's can be
     // in the list by any route.
-    expect(theirConvs).toEqual([])
+    const theirs = await request.get('/capi/assist/conversations', { headers: auth })
+    expect((await theirs.json()).conversations).toEqual([])
 
-    // And reaching for the owner's keys by name yields empty conversations of
-    // the attacker's own, never the owner's titles, snippets or messages.
-    const mySnippets = myConvs.map((c) => c.last_snippet).filter(Boolean)
-    for (const c of myConvs) {
-      const path = `/capi/assist/conversations/${encodeURIComponent(c.conversation_key)}`
-      const probe = await request.get(path, { headers: auth })
-      expect(probe.status()).toBe(200)
-      const body = await probe.json()
-      expect(body.messages, `${c.conversation_key} leaked messages`).toEqual([])
-    }
+    // Naming the owner's key directly yields an empty conversation of the
+    // attacker's own — never the owner's title, snippet or messages.
+    const path = `/capi/assist/conversations/${encodeURIComponent(owned.conversation_key)}`
+    const probe = await request.get(path, { headers: auth })
+    expect(probe.status()).toBe(200)
+    expect((await probe.json()).messages, 'owner messages leaked').toEqual([])
+
+    const paged = await request.get(`${path}/messages`, { headers: auth })
+    expect(paged.status()).toBe(200)
+    expect((await paged.json()).messages, 'owner messages leaked via the paged route').toEqual([])
 
     const afterProbe = await request.get('/capi/assist/conversations', { headers: auth })
     for (const c of (await afterProbe.json()).conversations) {
       expect(c.message_count, 'probed conversation is empty').toBe(0)
-      expect(mySnippets, 'owner snippet leaked').not.toContain(c.last_snippet)
+      expect(c.title, 'owner title leaked').not.toBe(secret)
+      expect(c.last_snippet, 'owner snippet leaked').toBeFalsy()
     }
+
+    // And the owner's chat is untouched by any of it.
+    const after = await request.get('/capi/assist/conversations', {
+      headers: { Authorization: `Bearer ${ownerToken()}` },
+    })
+    const still = (await after.json()).conversations.find(
+      (c) => c.conversation_key === owned.conversation_key,
+    )
+    expect(still, 'the owner still holds their chat').toBeTruthy()
+    expect(still.title, 'the owner\'s title survived').toBe(secret)
   })
 
   test('CHAT-ISO-03: the endpoints refuse an unauthenticated caller', async ({ request }) => {
