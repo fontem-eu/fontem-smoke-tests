@@ -159,3 +159,152 @@ jobs:
             git rebase origin/main || { git rebase --abort; echo "::error::rebase conflict in testing/"; exit 1; }
             sleep $((ATTEMPT * 2))
           done
+
+  # Renovate bumps the very libraries this suite is built on — Playwright,
+  # eslint — but nothing else in this workflow ever executes a test. As the
+  # comment on `analyze` says, the e2e runs against a deployed environment,
+  # not in CI. So a dependency bump could reach main having never been run
+  # once: @playwright/test v1.60 automerged on 2026-08-26 completely
+  # unexercised, because this repo's branch protection required no checks.
+  #
+  # This builds the PR and runs the real suite against staging, so the bump
+  # is gated on the tests it actually changes. Register it as a required
+  # status check — Renovate's platformAutomerge defers to Gitea's
+  # merge-when-checks-pass, which only waits for *required* contexts.
+  #
+  # The renovate-only scoping is a STEP guard, not a job-level `if:`. A job
+  # skipped by `if:` publishes no status, so as a required context it would
+  # block every human PR forever waiting on a check that never reports.
+  # This way the job always runs and always reports; it just exits early
+  # with nothing to do when the PR isn't a dependency bump.
+  e2e-staging:
+    needs: security
+    runs-on: ubuntu-latest
+    # attest-staging (in gitops) seeds fixtures into this same namespace to
+    # mint the tested-in-staging attestation. Two e2e Jobs at once would
+    # race on that data and both could fail spuriously, so share its lock
+    # rather than introduce a second one. Never cancel in progress: a
+    # half-run suite leaves its fixtures behind.
+    concurrency:
+      group: attest-staging
+      cancel-in-progress: false
+    steps:
+      - id: scope
+        name: Gate applies?
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -eu
+          case "$EVENT:$HEAD_REF" in
+            pull_request:renovate/*)
+              echo "dependency PR ($HEAD_REF) — running the staging e2e"
+              echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "not a Renovate PR ($EVENT:$HEAD_REF) — nothing to gate"
+              echo "run=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@v5
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: void42/ci-actions
+          path: .ci-actions
+          token: ${{ secrets.CI_READ_TOKEN }}
+
+      # The suite has to run as the PR built it, not as staging is pinned —
+      # otherwise the gate exercises the old dependency set and proves
+      # nothing about the bump.
+      - id: image
+        if: steps.scope.outputs.run == 'true'
+        name: Build the PR image
+        uses: ./.ci-actions/actions/docker-build-sign
+        with:
+          image: contribute.void42.internal/fontem/fontem-smoke-tests
+          cosign-key: ${{ secrets.COSIGN_KEY }}
+          registry-user: ${{ secrets.REGISTRY_USER }}
+          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - if: steps.scope.outputs.run == 'true'
+        name: Install kubectl
+        run: |
+          curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl
+          chmod +x /usr/local/bin/kubectl
+
+      - if: steps.scope.outputs.run == 'true'
+        name: Set up kubeconfig
+        env:
+          KUBECONFIG_DATA: ${{ secrets.PROMOTE_KUBECONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KUBECONFIG_DATA" ]; then
+            echo "::error::PROMOTE_KUBECONFIG secret is empty — cannot reach the cluster"
+            exit 1
+          fi
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_DATA" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - if: steps.scope.outputs.run == 'true'
+        name: Run e2e against staging
+        env:
+          E2E_NAMESPACE: fontem-staging
+          E2E_ENV: staging
+          E2E_BASE_URL: https://fontem.staging.void42.internal
+          E2E_IMAGE_TAG: ${{ steps.image.outputs.tag }}
+          REG_USER: ${{ secrets.REGISTRY_USER }}
+          REG_PASS: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          # The fixture init-container runs the community-api image, so it
+          # has to match what staging is actually running — a mismatched
+          # tag seeds against a schema the environment doesn't have.
+          rm -rf /tmp/gitops
+          git clone --depth=1 \
+            "http://${REG_USER}:${REG_PASS}@gitea-http.dev-tools.svc.cluster.local:3000/fontem/gitops.git" \
+            /tmp/gitops
+          E2E_CAPI_TAG=$(grep '^version:' /tmp/gitops/staging/fontem-community-api.yaml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ -z "$E2E_CAPI_TAG" ]; then
+            echo "::error::could not read the community-api tag from staging/fontem-community-api.yaml"
+            exit 1
+          fi
+          echo "e2e image: $E2E_IMAGE_TAG   fixture image: $E2E_CAPI_TAG"
+
+          JOB=$(sed -e "s|\${E2E_NAMESPACE}|$E2E_NAMESPACE|g" \
+                    -e "s|\${E2E_ENV}|$E2E_ENV|g" \
+                    -e "s|\${E2E_BASE_URL}|$E2E_BASE_URL|g" \
+                    -e "s|\${E2E_IMAGE_TAG}|$E2E_IMAGE_TAG|g" \
+                    -e "s|\${E2E_CAPI_TAG}|$E2E_CAPI_TAG|g" \
+                    deployment/e2e-job.yaml \
+                | kubectl create -f - -o name)
+          echo "created $JOB in $E2E_NAMESPACE"
+
+          # Shorter than the promotion gate's 65 minutes: this one blocks a
+          # dependency PR, and a suite that hasn't finished in 40 is stuck,
+          # not slow.
+          DEADLINE=$((SECONDS + 2400))
+          VERDICT=timeout
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            if [ "$(kubectl get "$JOB" -n "$E2E_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}')" = "True" ]; then
+              VERDICT=pass; break
+            fi
+            if [ "$(kubectl get "$JOB" -n "$E2E_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}')" = "True" ]; then
+              VERDICT=fail; break
+            fi
+            sleep 10
+          done
+
+          echo "::group::e2e output"
+          kubectl logs "$JOB" -n "$E2E_NAMESPACE" --tail=400 || true
+          echo "::endgroup::"
+
+          kubectl delete "$JOB" -n "$E2E_NAMESPACE" --ignore-not-found
+
+          if [ "$VERDICT" != "pass" ]; then
+            echo "::error::e2e against staging did not pass ($VERDICT) — the dependency bump is not safe to merge"
+            exit 1
+          fi
+          echo "e2e green — bump is safe to merge"
