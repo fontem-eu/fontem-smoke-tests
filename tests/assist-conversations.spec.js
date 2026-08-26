@@ -156,8 +156,22 @@ test.describe('Assistant chat isolation — deliberate cross-user attacks', () =
     const auth = { Authorization: `Bearer ${attacker}` }
     const path = `/capi/assist/conversations/${encodeURIComponent(victimKey)}`
 
-    // Read: find-or-create is scoped to the caller, so the attacker gets an
-    // empty conversation of their own — never the owner's messages.
+    // Write attempts FIRST, before any read.
+    //
+    // The read path is find-or-create scoped to the caller, so a GET of
+    // someone else's key mints the attacker their own empty conversation
+    // under that key — after which a rename of *their* row legitimately
+    // succeeds. That is not a leak, but it does mean the order of these
+    // requests decides what the status code means, and asserting 404 after a
+    // read tests nothing.
+    const renamed = await request.patch(path, { headers: auth, data: { title: 'owned' } })
+    expect(renamed.status(), 'rename before any read').toBe(404)
+
+    const deleted = await request.delete(path, { headers: auth })
+    expect(deleted.status(), 'delete before any read').toBe(404)
+
+    // Read: the attacker gets an empty conversation of their own — never the
+    // owner's messages, which is the property that actually matters.
     const read = await request.get(path, { headers: auth })
     expect(read.status()).toBe(200)
     expect((await read.json()).messages).toEqual([])
@@ -165,14 +179,6 @@ test.describe('Assistant chat isolation — deliberate cross-user attacks', () =
     const paged = await request.get(`${path}/messages`, { headers: auth })
     expect(paged.status()).toBe(200)
     expect((await paged.json()).messages).toEqual([])
-
-    // Rename and delete: 404, not 403 — "exists, but not yours" is what an
-    // enumeration attack needs.
-    const renamed = await request.patch(path, { headers: auth, data: { title: 'owned' } })
-    expect(renamed.status()).toBe(404)
-
-    const deleted = await request.delete(path, { headers: auth })
-    expect(deleted.status()).toBe(404)
 
     // And it is all still there afterwards.
     const after = await request.get('/capi/assist/conversations', {
@@ -182,18 +188,44 @@ test.describe('Assistant chat isolation — deliberate cross-user attacks', () =
     expect(keys).toContain(victimKey)
   })
 
-  test('CHAT-ISO-02: the attacker never sees your chat in their own list', async ({ request }) => {
-    const attacker = await registerLogin(request, `chatiso-${RUN}@example.com`)
+  test('CHAT-ISO-02: none of your chat content reaches the attacker', async ({ request }) => {
+    // Deliberately NOT asserting that the two key sets are disjoint. The
+    // keyspace is per-user on purpose — `report:<uuid>` is the same string
+    // for everyone reading that report, and two people discussing it are
+    // meant to get one conversation each, not to collide. Overlapping keys
+    // are the design; overlapping *content* would be the breach.
+    const attacker = await registerLogin(request, `chatiso2-${RUN}@example.com`)
+    const auth = { Authorization: `Bearer ${attacker}` }
+
     const mine = await request.get('/capi/assist/conversations', {
       headers: { Authorization: `Bearer ${ownerToken()}` },
     })
-    const myKeys = (await mine.json()).conversations.map((c) => c.conversation_key)
+    const myConvs = (await mine.json()).conversations
+    expect(myConvs.length).toBeGreaterThan(0)
 
-    const theirs = await request.get('/capi/assist/conversations', {
-      headers: { Authorization: `Bearer ${attacker}` },
-    })
-    const theirKeys = (await theirs.json()).conversations.map((c) => c.conversation_key)
-    for (const k of myKeys) expect(theirKeys).not.toContain(k)
+    const theirs = await request.get('/capi/assist/conversations', { headers: auth })
+    const theirConvs = (await theirs.json()).conversations
+
+    // A fresh persona has no chats at all, so nothing of the owner's can be
+    // in the list by any route.
+    expect(theirConvs).toEqual([])
+
+    // And reaching for the owner's keys by name yields empty conversations of
+    // the attacker's own, never the owner's titles, snippets or messages.
+    const mySnippets = myConvs.map((c) => c.last_snippet).filter(Boolean)
+    for (const c of myConvs) {
+      const path = `/capi/assist/conversations/${encodeURIComponent(c.conversation_key)}`
+      const probe = await request.get(path, { headers: auth })
+      expect(probe.status()).toBe(200)
+      const body = await probe.json()
+      expect(body.messages, `${c.conversation_key} leaked messages`).toEqual([])
+    }
+
+    const afterProbe = await request.get('/capi/assist/conversations', { headers: auth })
+    for (const c of (await afterProbe.json()).conversations) {
+      expect(c.message_count, 'probed conversation is empty').toBe(0)
+      expect(mySnippets, 'owner snippet leaked').not.toContain(c.last_snippet)
+    }
   })
 
   test('CHAT-ISO-03: the endpoints refuse an unauthenticated caller', async ({ request }) => {
