@@ -137,7 +137,7 @@ test.describe('Assistant chat isolation — deliberate cross-user attacks', () =
   // someone else's conversation key; a UI that hides a button does not answer
   // whether the endpoint behind it would have complied.
 
-  test('CHAT-ISO-01: another user cannot read, rename or delete your chat', async ({ page, request }) => {
+  test('CHAT-ISO-01: another user cannot read, rename or delete your chat', async ({ page, request }, testInfo) => {
     // Owner creates a chat through the UI, so the key under attack is one the
     // product actually mints.
     await openAssistant(page)
@@ -152,7 +152,12 @@ test.describe('Assistant chat isolation — deliberate cross-user attacks', () =
     const victimKey = (await listed.json()).conversations[0].conversation_key
     expect(victimKey).toBeTruthy()
 
-    const attacker = await registerLogin(request, `chatiso-${RUN}@example.com`)
+    // Per-attempt persona: this test's whole point is what happens *before*
+    // the attacker has touched the key, and a retry reusing the previous
+    // attempt's account starts with the row that attempt created.
+    const attacker = await registerLogin(
+      request, `chatiso-${RUN}-r${testInfo.retry}@example.com`,
+    )
     const auth = { Authorization: `Bearer ${attacker}` }
     const path = `/capi/assist/conversations/${encodeURIComponent(victimKey)}`
 
@@ -188,13 +193,18 @@ test.describe('Assistant chat isolation — deliberate cross-user attacks', () =
     expect(keys).toContain(victimKey)
   })
 
-  test('CHAT-ISO-02: none of your chat content reaches the attacker', async ({ request }) => {
+  test('CHAT-ISO-02: none of your chat content reaches the attacker', async ({ request }, testInfo) => {
     // Deliberately NOT asserting that the two key sets are disjoint. The
     // keyspace is per-user on purpose — `report:<uuid>` is the same string
     // for everyone reading that report, and two people discussing it are
     // meant to get one conversation each, not to collide. Overlapping keys
     // are the design; overlapping *content* would be the breach.
-    const attacker = await registerLogin(request, `chatiso2-${RUN}@example.com`)
+    // A distinct persona per attempt. Reusing one across a retry would carry
+    // the previous attempt's probe rows into the "fresh persona" assertion
+    // below and fail for a reason that has nothing to do with isolation.
+    const attacker = await registerLogin(
+      request, `chatiso2-${RUN}-r${testInfo.retry}@example.com`,
+    )
     const auth = { Authorization: `Bearer ${attacker}` }
 
     const mine = await request.get('/capi/assist/conversations', {
