@@ -2561,8 +2561,8 @@ test.describe.serial('Production Smoke Tests', () => {
       && (m.content || '').includes('E2E-SCENARIO')).lastIndexOf(true)
     expect(turnStart, 'could not find this turn in the conversation')
       .toBeGreaterThan(-1)
-    // A tool row stores the call's NAME as its content and the arguments in
-    // extras; the result is deliberately never stored.
+    // A tool row stores the call's NAME as its content, with the arguments
+    // and the (capped) result in extras.
     const toolRows = messages.slice(turnStart).filter((m) => m.role === 'tool')
     const called = toolRows.map((m) => m.content)
 
@@ -2801,11 +2801,17 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(call.extras?.args, `no arguments recorded: ${JSON.stringify(call.extras)}`)
       .toBeTruthy()
     expect(Object.keys(call.extras.args).length).toBeGreaterThan(0)
-    // The result is deliberately NOT kept. A tool returning 90k of JSON would
-    // make the conversation store mostly tool output.
-    expect(call.extras).not.toHaveProperty('result')
-    expect(JSON.stringify(call.extras)).not.toContain('gmr_id')
-    // Its size is kept even though its body is not.
+    // The result IS kept, as of the per-model context budget. It used to be
+    // dropped so the store would not become mostly tool output, which also
+    // meant the next turn had no idea what the last one found — the model
+    // re-ran searches it had already run, and the panel rendered historical
+    // tool bubbles with an empty body.
+    expect(call.extras, `no result recorded: ${JSON.stringify(call.extras)}`)
+      .toHaveProperty('result')
+    // Bounded, so one row can never be unbounded whatever the tool returned.
+    expect(String(call.extras.result).length).toBeLessThanOrEqual(8_000)
+    // The size of what the tool produced is kept alongside it, which is how
+    // "the model saw less than the tool returned" stays answerable.
     expect(call.extras).toHaveProperty('bytes')
     // Addressable, so an activity entry can point at this exact call.
     expect(call.id, 'the tool row has no id to link to').toBeTruthy()
