@@ -62,7 +62,7 @@ jobs:
           # Pin Node 22 explicitly so cyclonedx-npm and the docker
           # build use a known version. The runner's bundled node
           # has bitten us before — fontem-web #120 / vite 8.
-          node-version: '22'
+          node-version: '24'
 
       - name: Install deps (for cyclonedx-npm)
         run: npm ci --prefer-offline --no-audit --no-fund
