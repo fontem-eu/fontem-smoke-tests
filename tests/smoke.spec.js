@@ -2503,6 +2503,78 @@ test.describe.serial('Production Smoke Tests', () => {
     }
   })
 
+  test('ASSIST-24: read the draft, then rewrite it whole', async ({ page }) => {
+    // The document surface, end to end: the scripted model reads the saved
+    // draft (read_document), proposes a whole-body rewrite (replace_body),
+    // the card renders, Apply swaps the ENTIRE body — and the conversation
+    // records the read before the proposal, which is the contract the
+    // tooling rework exists to enforce: you cannot revise what you have
+    // not read.
+    test.setTimeout(300_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+
+    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const pick = async (id) => page.request.put('/capi/assist/models', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { model_id: id },
+    })
+    const chose = await pick('mock-e2e')
+    test.skip(chose.status() === 422,
+      'scripted model not enabled here (assistMockModel unset)')
+    expect(chose.ok(), `could not select the scripted model: ${chose.status()}`).toBeTruthy()
+
+    try {
+      await page.goto(`/stories/${storyId}/edit`)
+      await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+      await page.click('[data-testid="assist-toggle"]')
+      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+      await sendAssistMessage(page, 'E2E-SCENARIO: edit rewrite this draft.')
+      await expect(page.locator('[data-testid="assist-status"]')).toBeHidden({ timeout: 200_000 })
+
+      // The card carries the whole-body action, not an append.
+      await expect(page.locator('[data-testid="assist-proposals"]').last()).toBeVisible({ timeout: 30_000 })
+      await expect(page.locator('[data-testid="proposal-action"]').last())
+        .toContainText(/replace[ _]body/i)
+
+      await page.locator('[data-testid="proposal-apply"]').last().click()
+      await expect(page.locator('[data-testid="proposal-applied"]').last()).toBeVisible({ timeout: 5_000 })
+
+      // Applied means REPLACED: the mock's marker is the body now, alone.
+      const body = page.locator('[data-testid="editor-body"]')
+      await expect(body).toContainText('MOCK-REWRITE', { timeout: 5_000 })
+
+      // And the stored conversation shows the read happened first — through
+      // the API, because the panel could render a card without persisting
+      // anything, which is exactly the class of bug the record exists for.
+      const conv = await page.request.get(
+        `/capi/assist/conversations/report:${storyId}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      expect(conv.ok()).toBeTruthy()
+      const messages = (await conv.json()).messages || []
+      const turnStart = messages.map((m) => m.role === 'user'
+        && (m.content || '').includes('E2E-SCENARIO: edit')).lastIndexOf(true)
+      expect(turnStart, 'this turn is missing from the record').toBeGreaterThan(-1)
+      const tools = messages.slice(turnStart)
+        .filter((m) => m.role === 'tool').map((m) => m.content)
+      expect(tools, 'read_document must be recorded').toContain('mcp__gmr__read_document')
+      expect(tools, 'replace_body must be recorded').toContain('mcp__gmr__replace_body')
+      expect(tools.indexOf('mcp__gmr__read_document'),
+        'the read must precede the proposal — you cannot revise what you have not read')
+        .toBeLessThan(tools.indexOf('mcp__gmr__replace_body'))
+      // The read stored its result: the record shows WHAT was read, not
+      // just that a read happened. Shipped with the panel rework; this is
+      // the first gate that exercises it.
+      const readRow = messages.slice(turnStart).find(
+        (m) => m.role === 'tool' && m.content === 'mcp__gmr__read_document')
+      expect(readRow.extras?.result, 'the read result was not stored').toBeTruthy()
+    } finally {
+      await pick('qwen3-1.7b')
+    }
+  })
+
   async function runToolChain(page) {
     await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
