@@ -10,7 +10,7 @@
     "lint": "eslint tests/ && node --test tests/prompt-lint.test.js"
   },
   "devDependencies": {
-    "@playwright/test": "1.62.0",
+    "@playwright/test": "1.62.1",
     "eslint": "^9.26.0"
   },
   "overrides": {
