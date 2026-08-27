@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright:v1.60.0-noble
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
 
 WORKDIR /app
 
@@ -36,8 +36,32 @@ RUN curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/lin
     && apt-get install -y --no-install-recommends python3-yaml \
     && rm -rf /var/lib/apt/lists/*
 
-# Chromium is already present in the base image — matches the pinned
-# @playwright/test version so no runtime download is attempted.
+# Install the browser the INSTALLED package asks for, rather than trusting
+# the base image to carry it.
+#
+# The base image ships browsers for its own version and nothing else, so a
+# Renovate bump of @playwright/test on its own left the two out of step and
+# every test died at launch with
+#
+#   browserType.launch: Executable doesn't exist at
+#   /ms-playwright/chromium_headless_shell-<build>/chrome-headless-shell
+#
+# which reads as a broken environment rather than a version mismatch. That
+# blocked every promotion three times running (1.60.0, 1.61.0, 1.61.1),
+# because nothing links a Dockerfile FROM to a package.json dependency and
+# Renovate cannot see across the two.
+#
+# Done at build time, not at run time, deliberately: this layer already
+# reaches the network (kubectl above), whereas the e2e Job is on the
+# promotion gate's critical path and currently needs no egress for browsers.
+# Downloading per-run would trade a version mismatch for a CDN outage, and an
+# ephemeral Job has nowhere to cache to without a shared volume.
+#
+# `npx playwright install` resolves the build from the version in
+# node_modules, so the base image now only has to supply the OS libraries.
+# Keep the FROM roughly current for those, but a drifted tag is no longer
+# able to break the run.
+RUN npx playwright install chromium
 
 # Default target: TESTING, never production. e2e is a promotion gate —
 # it runs against testing before staging and against staging before
