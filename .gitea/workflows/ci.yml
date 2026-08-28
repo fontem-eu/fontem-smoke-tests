@@ -57,7 +57,7 @@ jobs:
           path: .ci-actions
           token: ${{ secrets.CI_READ_TOKEN }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           # Pin Node 22 explicitly so cyclonedx-npm and the docker
           # build use a known version. The runner's bundled node
