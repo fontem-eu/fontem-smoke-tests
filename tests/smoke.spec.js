@@ -1551,9 +1551,31 @@ test.describe.serial('Production Smoke Tests', () => {
         ignoreHTTPSErrors: true,
       })
       const anonPage = await anonCtx.newPage()
+      // When this page renders empty the button assertion says only
+      // "element(s) not found" — run 28166 failed exactly so, with the
+      // actual cause (a 4xx on the story fetch?) invisible. Collect the
+      // page's failed API responses and put them in the failure message.
+      const anonApiFailures = []
+      anonPage.on('response', (resp) => {
+        if (resp.url().includes('/capi/') && resp.status() >= 400) {
+          const via = resp.headers()['x-ratelimited-by'] || ''
+          anonApiFailures.push(
+            `${resp.status()} ${resp.url()}${via ? ` (via ${via})` : ''}`,
+          )
+        }
+      })
       await anonPage.goto(`/stories/${anonStoryId}?cb=${Date.now()}`)
       const btn = anonPage.locator('[data-testid="flower-button"]')
-      await expect(btn).toBeVisible({ timeout: 15_000 })
+      try {
+        await expect(btn).toBeVisible({ timeout: 15_000 })
+      } catch (e) {
+        // Evaluated AFTER the wait, so it names calls that failed while
+        // we were waiting — a message built at expect() time would not.
+        throw new Error(
+          `flower button missing; failed API calls: ` +
+          `${anonApiFailures.join(', ') || 'none captured'}\n${e.message}`,
+        )
+      }
       await expect(btn).toBeDisabled({ timeout: 5_000 })
       const title = await btn.getAttribute('title')
       // Locale-agnostic check: the sign-in tooltip exists and isn't
@@ -1822,7 +1844,11 @@ test.describe.serial('Production Smoke Tests', () => {
         const r = await request.get(url, { timeout: 60_000 })
         if (r.status() >= 400) {
           const body = (await r.text()).slice(0, 160)
-          failures.push(`${d.code} (lvl=${level}) → ${r.status()}: ${body}`)
+          const via = r.headers()['x-ratelimited-by'] || ''
+          failures.push(
+            `${d.code} (lvl=${level}) → ${r.status()}` +
+            `${via ? ` (via ${via})` : ''}: ${body}`,
+          )
         }
       } catch (e) {
         failures.push(`${d.code} (lvl=${level}) → request error: ${String(e).slice(0, 160)}`)
@@ -1850,7 +1876,12 @@ test.describe.serial('Production Smoke Tests', () => {
     const consoleErrors = []
     page.on('response', (resp) => {
       if (resp.url().includes('/api/atlas/') && resp.status() >= 400) {
-        apiFailures.push(`${resp.status()} ${resp.url()}`)
+        // The marker header names WHICH layer rate-limited (four can);
+        // triaging run 28166's 429s burned time working that out.
+        const via = resp.headers()['x-ratelimited-by'] || ''
+        apiFailures.push(
+          `${resp.status()} ${resp.url()}${via ? ` (via ${via})` : ''}`,
+        )
       }
     })
     page.on('console', (m) => {
