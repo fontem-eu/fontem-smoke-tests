@@ -173,9 +173,15 @@ test.describe('Assistant chat tabs', () => {
     await openAssistant(page)
     const name = await createNamedChat(page, `Doomed ${RUN}-${testInfo.retry}`)
 
-    await rowByName(page, name)
+    const del = rowByName(page, name)
       .locator('[data-testid="assist-conversation-delete"]')
-      .click()
+    // Two taps: the first arms the button (mobile mis-tap protection,
+    // web fix/assist-mobile-usability), the second deletes. The second
+    // tap is conditional so this passes on a testing env that has not
+    // rolled the two-tap web yet — once it has, the first tap must NOT
+    // have deleted anything for the click below to find the button.
+    await del.click()
+    if (await rowByName(page, name).count()) await del.click()
 
     await expect(rowByName(page, name)).toHaveCount(0)
   })
