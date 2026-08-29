@@ -3000,6 +3000,124 @@ test.describe.serial('Production Smoke Tests', () => {
     }).catch(() => {})
   })
 
+  test('ASSIST-26: a conversation survives a reload and stays reachable', async ({ page }) => {
+    // The production blocker (2026-08-28): prompts sent while editing a
+    // story landed in the story's own chat, which the panel HID — no
+    // switcher on report pages — so after any hiccup the prompt looked
+    // gone forever. This pins the whole loop: send, reload the app,
+    // reopen, and both the message and the way BACK to every other chat
+    // must be there.
+    test.setTimeout(180_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const pick = async (id) => page.request.put('/capi/assist/models', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { model_id: id },
+    })
+    const chose = await pick('mock-e2e')
+    test.skip(chose.status() === 422,
+      'scripted model not enabled here (assistMockModel unset)')
+    try {
+      await page.goto(`/stories/${storyId}/edit`)
+      await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+      await page.click('[data-testid="assist-toggle"]')
+      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+      const marker = `REVISIT-${RUN_ID.slice(0, 8)}`
+      const reply = await sendAssistMessage(page, `E2E-SCENARIO: echo ${marker}`)
+      expect(reply).toContain(marker)
+
+      // The app restart the user performed, scripted.
+      await page.reload()
+      await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 15_000 })
+      await page.click('[data-testid="assist-toggle"]')
+      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+      // The prompt is still here...
+      await expect(page.locator('[data-testid="assist-messages"]'))
+        .toContainText(marker, { timeout: 15_000 })
+      // ...and so is the way to every other chat. The switcher used to be
+      // absent on report pages, which is what made this chat "hidden".
+      await expect(page.locator('[data-testid="assist-conversation-bar"]'),
+        'the conversation switcher must exist on a report page')
+        .toBeVisible({ timeout: 5_000 })
+      await page.click('[data-testid="assist-conversation-switcher"]')
+      await expect(page.locator('[data-testid="assist-conversation-list"]'))
+        .toBeVisible({ timeout: 5_000 })
+    } finally {
+      await pick('qwen3-1.7b')
+    }
+  })
+
+  test('ASSIST-27: an open-ended turn of six tool calls completes and the UI survives it', async ({ page }) => {
+    // The other half of the same blocker: a real investigation prompt
+    // produces half a dozen tool calls in one stream, and the panel froze
+    // and took the tab down under exactly that shape while every short
+    // scripted turn passed. The marathon scenario reproduces the shape
+    // deterministically; the assertions are the user's experience — all
+    // the working shown, the answer delivered, and an input that still
+    // types afterwards.
+    test.setTimeout(300_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const pick = async (id) => page.request.put('/capi/assist/models', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { model_id: id },
+    })
+    const chose = await pick('mock-e2e')
+    test.skip(chose.status() === 422,
+      'scripted model not enabled here (assistMockModel unset)')
+    try {
+      await page.goto(`/stories/${storyId}/edit`)
+      await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+      await page.click('[data-testid="assist-toggle"]')
+      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+      const reply = await sendAssistMessage(page,
+        'E2E-SCENARIO: marathon — investigate EU procurement end to end.')
+      expect(reply, `marathon broke: "${reply.slice(0, 300)}…"`)
+        .toContain('MOCK-MARATHON-DONE')
+
+      // Navigate asks; it must not move an editing user.
+      const navPrompt = page.locator('[data-testid="assist-nav"]')
+      if (await navPrompt.isVisible().catch(() => false)) {
+        await page.click('[data-testid="assist-nav-stay"]')
+      }
+
+      // Every call in the record, this turn.
+      const conv = await page.request.get(
+        `/capi/assist/conversations/report:${storyId}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      const messages = (await conv.json()).messages || []
+      const turnStart = messages.map((m) => m.role === 'user'
+        && (m.content || '').includes('marathon')).lastIndexOf(true)
+      expect(turnStart).toBeGreaterThan(-1)
+      const called = messages.slice(turnStart)
+        .filter((m) => m.role === 'tool').map((m) => m.content)
+      expect(called.length,
+        `expected six tool calls, got ${JSON.stringify(called)}`)
+        .toBeGreaterThanOrEqual(6)
+      for (const name of ['mcp__gmr__search_entities',
+        'mcp__gmr__investigate_entity', 'mcp__gmr__query_graph',
+        'mcp__gmr__calculate', 'navigate']) {
+        expect(called, `${name} missing`).toContain(name)
+      }
+
+      // The tab survived: the working is on screen and the input still
+      // types. A frozen renderer fails both.
+      const bubbles = page.locator('.assist-msg--tool')
+      expect(await bubbles.count()).toBeGreaterThanOrEqual(5)
+      await page.fill('[data-testid="assist-input"]', 'still alive?')
+      await expect(page.locator('[data-testid="assist-input"]'))
+        .toHaveValue('still alive?')
+    } finally {
+      await pick('qwen3-1.7b')
+    }
+  })
+
   // ── Public-report regression gate ────────────────────────────────
   //
   // Regression: clicking a shared link to a public_open report
