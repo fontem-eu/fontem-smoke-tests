@@ -2516,7 +2516,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // Select the scripted model for this user, and put it back afterwards —
     // the suite shares one account, so leaving it set would silently move
     // every later assistant test onto the mock.
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     const pick = async (id) => page.request.put('/capi/assist/models', {
       headers: { Authorization: `Bearer ${token}` },
       data: { model_id: id },
@@ -2545,7 +2545,7 @@ test.describe.serial('Production Smoke Tests', () => {
     if (!storyId) test.skip()
     await uiLogin(page)
 
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    const token = await freshAccessToken(page)
     const pick = async (id) => page.request.put('/capi/assist/models', {
       headers: { Authorization: `Bearer ${token}` },
       data: { model_id: id },
@@ -2649,7 +2649,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // the part a 1.7B could never make assertable.
     const conv = await page.request.get(
       `/capi/assist/conversations/report:${storyId}`,
-      { headers: { Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('gmr-token'))}` } },
+      { headers: { Authorization: `Bearer ${await freshAccessToken(page)}` } },
     )
     expect(conv.ok(), `conversation fetch failed: ${conv.status()}`).toBeTruthy()
     const messages = (await conv.json()).messages || []
@@ -2697,7 +2697,7 @@ test.describe.serial('Production Smoke Tests', () => {
     // that caused it, and every call in order.
     const prov = await page.request.get(
       `/capi/assist/provenance/${investigate.id}`,
-      { headers: { Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('gmr-token'))}` } },
+      { headers: { Authorization: `Bearer ${await freshAccessToken(page)}` } },
     )
     expect(prov.ok(), `provenance fetch failed: ${prov.status()}`).toBeTruthy()
     const body = await prov.json()
@@ -3041,7 +3041,12 @@ test.describe.serial('Production Smoke Tests', () => {
     test.setTimeout(180_000)
     if (!storyId) test.skip()
     await uiLogin(page)
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    // The SPA keeps its access token in memory now; localStorage
+    // 'gmr-token' is only whatever storageState happened to carry, and a
+    // null token made this PUT 401 SILENTLY — the turn then ran on the
+    // real model and answered from the global history instead of echoing
+    // (run 28614). Use the injected bootstrap token and assert the switch.
+    const token = await freshAccessToken(page)
     const pick = async (id) => page.request.put('/capi/assist/models', {
       headers: { Authorization: `Bearer ${token}` },
       data: { model_id: id },
@@ -3049,6 +3054,8 @@ test.describe.serial('Production Smoke Tests', () => {
     const chose = await pick('mock-e2e')
     test.skip(chose.status() === 422,
       'scripted model not enabled here (assistMockModel unset)')
+    expect(chose.ok(),
+      `could not select the scripted model: ${chose.status()}`).toBeTruthy()
     try {
       await page.goto(`/stories/${storyId}/edit`)
       await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
@@ -3092,7 +3099,12 @@ test.describe.serial('Production Smoke Tests', () => {
     test.setTimeout(300_000)
     if (!storyId) test.skip()
     await uiLogin(page)
-    const token = await page.evaluate(() => localStorage.getItem('gmr-token'))
+    // The SPA keeps its access token in memory now; localStorage
+    // 'gmr-token' is only whatever storageState happened to carry, and a
+    // null token made this PUT 401 SILENTLY — the turn then ran on the
+    // real model and answered from the global history instead of echoing
+    // (run 28614). Use the injected bootstrap token and assert the switch.
+    const token = await freshAccessToken(page)
     const pick = async (id) => page.request.put('/capi/assist/models', {
       headers: { Authorization: `Bearer ${token}` },
       data: { model_id: id },
@@ -3100,6 +3112,8 @@ test.describe.serial('Production Smoke Tests', () => {
     const chose = await pick('mock-e2e')
     test.skip(chose.status() === 422,
       'scripted model not enabled here (assistMockModel unset)')
+    expect(chose.ok(),
+      `could not select the scripted model: ${chose.status()}`).toBeTruthy()
     try {
       await page.goto(`/stories/${storyId}/edit`)
       await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
