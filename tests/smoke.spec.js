@@ -1294,18 +1294,33 @@ test.describe.serial('Production Smoke Tests', () => {
         const raw = await fetch(upBody.url)
         rawStatus = raw.status
       }
-      // Save a doc embedding the uploaded image, then read the story
-      // back: the read path rewrites /uploads/<key> → a presigned URL.
+      // Save a doc embedding the uploaded image and PUBLISH it, then
+      // read the story back: the read path rewrites /uploads/<key> → a
+      // presigned URL. A save alone would only move the author's draft,
+      // and this test is about what the read path serves.
+      const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` }
+      const before = await (await fetch(`/capi/data-stories/${id}`,
+                                        { headers: auth })).json()
       await fetch(`/capi/data-stories/${id}/content`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        headers: auth,
         body: JSON.stringify({
           tiptap: { type: 'doc', content: [
             { type: 'image', attrs: { src: upBody.url } },
           ] },
           version: 2,
+          base_revision: before.draft_revision || before.head_revision || null,
         }),
       })
+      const opened = await fetch(`/capi/data-stories/${id}/reviews`, {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({ kind: 'change' }),
+      })
+      if (opened.status === 201) {
+        const review = await opened.json()
+        await fetch(`/capi/data-stories/${id}/reviews/${review.id}/publish`,
+                    { method: 'POST', headers: auth })
+      }
       const read = await fetch(`/capi/data-stories/${id}`, {
         headers: { Authorization: `Bearer ${tok}` },
       })
