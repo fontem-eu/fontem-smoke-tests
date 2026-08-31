@@ -1477,9 +1477,13 @@ test.describe.serial('Production Smoke Tests', () => {
     test.setTimeout(60_000)
     if (!storyId) test.skip()
     await uiLogin(page)
+    // MENTION-1 saved the chip onto the author's draft; the read view
+    // shows the published text, so publishing is what puts it there.
+    await publishDraft(page, storyId)
     await page.goto(`/stories/${storyId}`)
 
-    // The chip from STORY-MENTION-1 must round-trip through save.
+    // The chip from STORY-MENTION-1 must round-trip through save,
+    // publish and reload.
     const chip = page.locator('[data-entity-iri^="http://data.fontem.eu/id/Company/"]').first()
     await expect(chip).toBeVisible({ timeout: 30_000 })
 
