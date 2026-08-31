@@ -3163,6 +3163,80 @@ test.describe.serial('Production Smoke Tests', () => {
     }
   })
 
+  // ── Reviews ──────────────────────────────────────────────────────
+  //
+  // Publishing is a decision now: an editor's save goes to their draft,
+  // and the article's public text moves when a change review is
+  // published. These walk the loop a person actually takes, because the
+  // parts have unit tests and the seam between them does not.
+
+  test('REVIEW-1: edit, review the diff, publish, and the article changes', async ({ page }) => {
+    test.setTimeout(120_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+
+    const marker = `REVIEW-${RUN_ID.slice(0, 8)}`
+    await page.goto(`/stories/${storyId}/edit`)
+    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 15_000 })
+    await page.locator('[data-testid="editor-body"]').click()
+    await page.keyboard.type(marker)
+
+    // The primary action saves the draft and takes you to the diff.
+    await page.click('[data-testid="review-story"]')
+    await page.waitForURL(/\/stories\/[^/]+\/reviews\//, { timeout: 30_000 })
+    await expect(page.locator('[data-testid="review-view"]')).toBeVisible()
+    await expect(page.locator('[data-testid="review-kind"]')).toContainText(/change/i)
+
+    // What changed is on the screen, as blocks.
+    await expect(page.locator('[data-testid="review-blocks"]')).toContainText(marker)
+
+    // Publishing moves the article; until then the public text is the old one.
+    await page.click('[data-testid="review-publish"]')
+    await page.waitForURL(/\/stories\/[^/]+$/, { timeout: 30_000 })
+    await expect(page.locator('body')).toContainText(marker, { timeout: 20_000 })
+  })
+
+  test('REVIEW-2: a comment sticks to the block it was left on', async ({ page }) => {
+    test.setTimeout(120_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+
+    // A full article review: one version, read end to end, nothing to merge.
+    await page.goto('/my-stories')
+    await expect(page.locator(`[data-testid="self-review-${storyId}"]`))
+      .toBeVisible({ timeout: 20_000 })
+    await page.click(`[data-testid="self-review-${storyId}"]`)
+    await page.waitForURL(/\/stories\/[^/]+\/reviews\//, { timeout: 30_000 })
+    await expect(page.locator('[data-testid="review-kind"]')).toContainText(/article/i)
+    // No diff and nothing to publish — that is the whole difference.
+    await expect(page.locator('[data-testid="review-publish"]')).toHaveCount(0)
+
+    const note = `note-${RUN_ID.slice(0, 8)}`
+    await page.locator('[data-testid="review-add-comment"]').first().click()
+    await page.fill('[data-testid="review-comment-input"]', note)
+    await page.click('[data-testid="review-comment-submit"]')
+
+    // It survives a reload, against the same block.
+    await expect(page.locator('[data-testid="review-comment"]').first())
+      .toContainText(note, { timeout: 20_000 })
+    await page.reload()
+    await expect(page.locator('[data-testid="review-comment"]').first())
+      .toContainText(note, { timeout: 20_000 })
+  })
+
+  test('REVIEW-3: my reviews lists what I started', async ({ page }) => {
+    test.setTimeout(90_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+    await page.goto('/my-reviews')
+    await expect(page.locator('[data-testid="my-reviews"]')).toBeVisible({ timeout: 20_000 })
+    // REVIEW-1 and REVIEW-2 both left one behind.
+    const rows = page.locator('[data-testid="my-review-row"]')
+    await expect(rows.first()).toBeVisible({ timeout: 20_000 })
+    await expect(page.locator('[data-testid="my-review-who"]').first())
+      .toContainText(/me/i)
+  })
+
   // ── Public-report regression gate ────────────────────────────────
   //
   // Regression: clicking a shared link to a public_open report
