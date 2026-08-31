@@ -81,6 +81,33 @@ async function freshAccessToken(page) {
   return token
 }
 
+/**
+ * Publish whatever is in this editor's draft.
+ *
+ * Saving no longer changes the article readers see: an editor's save
+ * lands on their draft, and the published text moves when a change
+ * review is published. Tests that assert on the READ view therefore have
+ * to publish first — the same step a person takes, done through the API
+ * because the subject of those tests is the read view, not the button.
+ *
+ * Silent when there is nothing to publish: a draft equal to the
+ * published text has no proposal to make, which is a fine state to be in.
+ */
+async function publishDraft(page, storyId) {
+  const token = await freshAccessToken(page)
+  const headers = { Authorization: `Bearer ${token}` }
+  const opened = await page.request.post(
+    `/capi/data-stories/${storyId}/reviews`,
+    { headers, data: { kind: 'change' } },
+  )
+  if (!opened.ok()) return false
+  const review = await opened.json()
+  const published = await page.request.post(
+    `/capi/data-stories/${storyId}/reviews/${review.id}/publish`, { headers },
+  )
+  return published.ok()
+}
+
 async function uiLogin(page) {
   await page.goto('/')
   // Try to mint a fresh access token via the cookie. If the cookie
@@ -1100,6 +1127,9 @@ test.describe.serial('Production Smoke Tests', () => {
   test('STORY-12: Story view renders content and title', async ({ page }) => {
     if (!storyId) test.skip()
     await uiLogin(page)
+    // The read view shows the PUBLISHED text, and STORY-10/11 only saved
+    // a draft. Publishing is the step that moves what readers see.
+    await publishDraft(page, storyId)
     await page.goto(`/stories/${storyId}`)
     // 30s timeout: the read view fetches the report fresh and the
     // edits from STORY-10/11 sometimes haven't propagated to the
