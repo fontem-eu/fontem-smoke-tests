@@ -63,6 +63,29 @@ async function api(request, tok, method, path, data) {
   return out
 }
 
+/**
+ * Save the body and publish it, which is what changes the article a
+ * reader sees.
+ *
+ * A save lands on the author's draft and names the revision it was
+ * written against; the published text moves when a change review is
+ * published. A translation goes stale against the PUBLISHED text, so a
+ * test about staleness has to go through both steps.
+ */
+async function publishBody(request, tok, sid, body) {
+  const before = await api(request, tok, 'GET', `/data-stories/${sid}`)
+  const base = before.body?.draft_revision || before.body?.head_revision || null
+  const saved = await api(request, tok, 'PUT', `/data-stories/${sid}/content`,
+                          { ...body, base_revision: base })
+  if (saved.status !== 200) return saved
+  const opened = await api(request, tok, 'POST',
+                           `/data-stories/${sid}/reviews`, { kind: 'change' })
+  // 400 means the draft already matches what is published — nothing to do.
+  if (opened.status !== 201) return saved
+  return api(request, tok, 'POST',
+             `/data-stories/${sid}/reviews/${opened.body.id}/publish`)
+}
+
 const doc = (text) => ({
   tiptap: { type: 'doc', content: [
     { type: 'paragraph', content: [{ type: 'text', text }] }] },
@@ -101,7 +124,7 @@ test.describe('Article translations', () => {
       `translations probe: HTTP ${hasTranslations.status} `
       + `${JSON.stringify(hasTranslations.body).slice(0, 200)}`).toBe(200)
 
-    await api(request, tok, 'PUT', `/data-stories/${sid}/content`, doc(EN_BODY))
+    await publishBody(request, tok, sid, doc(EN_BODY))
     const put = await api(request, tok, 'PUT', `/data-stories/${sid}/translations/pt`, {
       title: PT_TITLE, abstract: 'Resumo em português', tiptap: doc(PT_BODY).tiptap, version: 2,
     })
@@ -119,8 +142,8 @@ test.describe('Article translations', () => {
     await expect(page.locator('[data-testid="story-body"]')).toContainText(EN_BODY)
 
     // ── the original moves on: translation becomes potentially outdated ──
-    const bump = await api(request, tok, 'PUT', `/data-stories/${sid}/content`, doc(EN_BODY_V2))
-    expect(bump.status).toBe(200)
+    const bump = await publishBody(request, tok, sid, doc(EN_BODY_V2))
+    expect(bump.status, JSON.stringify(bump.body)).toBe(200)
 
     // A reader whose UI language is the stale one must NOT be silently served
     // it. This is the regression the policy change exists for: before, the
