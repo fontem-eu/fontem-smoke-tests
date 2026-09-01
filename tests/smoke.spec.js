@@ -2655,6 +2655,96 @@ test.describe.serial('Production Smoke Tests', () => {
     }
   })
 
+  test('ASSIST-28: the assistant reads the article on screen, not the selected chat', async ({ page }) => {
+    // The production failure this gate exists for (2026-08-31): the author
+    // was editing a story with an OLDER chat selected in the switcher, and
+    // every read_document came back "Report <uuid> not found" — the uuid of
+    // a story deleted months earlier, because the server took the document
+    // id from the conversation key. The article was on screen the whole
+    // time.
+    //
+    // Nothing below the request body could see it: the tools worked, the
+    // reports worked, the report the tools were pointed at was simply the
+    // wrong one. So the gate has to be a browser driving the real switcher
+    // — a unit test that hand-builds the request cannot get this wrong in
+    // the way the product did.
+    //
+    // Scripted model, because the assertion is about which document a tool
+    // read and not about a model's judgement. The 1.7B choosing to answer
+    // without reading would make this pass while proving nothing.
+    test.setTimeout(300_000)
+    if (!storyId) test.skip()
+    await uiLogin(page)
+
+    const token = await freshAccessToken(page)
+    const pick = async (id) => page.request.put('/capi/assist/models', {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { model_id: id },
+    })
+    const chose = await pick('mock-e2e')
+    test.skip(chose.status() === 422,
+      'scripted model not enabled here (assistMockModel unset)')
+    expect(chose.ok(), `could not select the scripted model: ${chose.status()}`).toBeTruthy()
+
+    try {
+      await page.goto(`/stories/${storyId}/edit`)
+      await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
+      await page.click('[data-testid="assist-toggle"]')
+      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
+
+      // Move off the report's own chat, the way the switcher lets anyone
+      // do in one click. The new chat is about nothing; the editor behind
+      // it still holds the article.
+      const [created] = await Promise.all([
+        page.waitForResponse((r) => r.url().includes('/capi/assist/conversations')
+          && r.request().method() === 'POST', { timeout: 30_000 }),
+        page.locator('[data-testid="assist-new-conversation"]').click(),
+      ])
+      const chatKey = (await created.json()).conversation_key
+      expect(chatKey, 'the new chat must not be the report chat')
+        .toMatch(/^chat:/)
+
+      // The turn carries both facts, and they disagree: this chat, that
+      // article. Asserting on the request localises a regression to the
+      // client instead of leaving it to look like a tool failure.
+      const [streamReq] = await Promise.all([
+        page.waitForRequest((r) => r.url().includes('/assist/chat/stream'), { timeout: 30_000 }),
+        sendAssistMessage(page, 'E2E-SCENARIO: edit rewrite this draft.'),
+      ])
+      const sent = JSON.parse(streamReq.postData() || '{}')
+      expect(sent.conversation_key, 'the turn should be in the chat we switched to')
+        .toBe(chatKey)
+      expect(sent.report_id, 'the turn must name the article on screen')
+        .toBe(storyId)
+
+      await expect(page.locator('[data-testid="assist-status"]')).toBeHidden({ timeout: 200_000 })
+      // The scripted model says this out loud when the read fails, which is
+      // what the production session saw.
+      await expect(page.locator('.assist-msg--assistant').last())
+        .not.toContainText('MOCK-FAIL')
+
+      // The proof: what read_document actually returned. It names the
+      // report it read, so the assertion is the identity of the document
+      // rather than the absence of an error.
+      const conv = await page.request.get(
+        `/capi/assist/conversations/${encodeURIComponent(chatKey)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      expect(conv.ok(), `could not read the chat back: ${conv.status()}`).toBeTruthy()
+      const messages = (await conv.json()).messages || []
+      const readRow = messages.filter(
+        (m) => m.role === 'tool' && m.content === 'mcp__gmr__read_document').pop()
+      expect(readRow, 'read_document is missing from the record — the document '
+        + 'tools were not offered for this turn').toBeTruthy()
+      const read = JSON.parse(readRow.extras?.result || '{}')
+      expect(read.error, `read_document errored: ${read.error}`).toBeFalsy()
+      expect(read.report_id, 'the assistant read a different article than the one open')
+        .toBe(storyId)
+    } finally {
+      await pick('qwen3-1.7b')
+    }
+  })
+
   async function runToolChain(page) {
     await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
