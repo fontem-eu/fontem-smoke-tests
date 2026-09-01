@@ -3746,6 +3746,61 @@ test.describe.serial('Production Smoke Tests', () => {
 
   // ── Cleanup ────────────────────────────────────────────────────
 
+  test('CSP-1: the security headers are exactly what was reviewed', async ({ request }) => {
+    // The compensating control for the DAST suppression.
+    //
+    // ZAP reports CSP findings once per URL, so one header on 52 pages is
+    // 52 findings, and every new route mints more "new" ones — which is
+    // what failed the gate on 2026-09-01 and what dast-ignore.yaml now
+    // suppresses. A suppression that broad can hide a genuinely weakened
+    // policy, so the policy is pinned here instead: one deterministic
+    // assertion in the place where a change is a diff someone reviews,
+    // rather than 52 scanner instances nobody reads.
+    //
+    // Directive-by-directive, not a string compare on the whole header:
+    // the failure message should say WHICH control was dropped.
+    const res = await request.get('/')
+    expect(res.status()).toBe(200)
+    const csp = res.headers()['content-security-policy']
+    expect(csp, 'no CSP header at all').toBeTruthy()
+
+    const directives = Object.fromEntries(
+      csp.split(';').map((d) => d.trim()).filter(Boolean)
+        .map((d) => { const [k, ...v] = d.split(/\s+/); return [k, v.join(' ')] }))
+
+    // Script execution is the control that matters most: hashes and 'self'
+    // only. If unsafe-inline or unsafe-eval ever appears here, the XSS
+    // suppression in dast-ignore.yaml loses one of its three legs.
+    expect(directives['script-src'], 'script-src must not allow unsafe-inline')
+      .not.toContain("'unsafe-inline'")
+    expect(directives['script-src'], "script-src must not allow unsafe-eval "
+      + "('wasm-unsafe-eval' is narrower and is allowed)")
+      .not.toMatch(/(^|\s)'unsafe-eval'/)
+    expect(directives['object-src']).toBe("'none'")
+    expect(directives['frame-ancestors']).toBe("'none'")
+    expect(directives['base-uri']).toBe("'self'")
+    expect(directives['form-action']).toBe("'self'")
+    expect(directives['default-src']).toBe("'self'")
+
+    // style-src carries a documented accepted risk — see the long note in
+    // fontem-web/security-headers.conf. Pinned so that "we still need
+    // unsafe-inline" stays a decision someone re-makes, and so the Google
+    // host cannot be dropped again: without it the browser blocks
+    // accounts.google.com/gsi/style and the sign-in button renders
+    // unstyled, which is how it shipped until 2026-09-01.
+    expect(directives['style-src']).toBe("'self' 'unsafe-inline' https://accounts.google.com")
+
+    // The rest of the header set. Cheap to assert, and each one has gone
+    // missing at least once when a location block defined its own
+    // add_header (nginx drops inherited ones the moment it does).
+    const h = res.headers()
+    expect(h['x-content-type-options']).toBe('nosniff')
+    expect(h['x-frame-options']).toBe('DENY')
+    expect(h['referrer-policy']).toBe('strict-origin-when-cross-origin')
+    expect(h['strict-transport-security'], 'HSTS must be set').toBeTruthy()
+    expect(h['permissions-policy'], 'Permissions-Policy must be set').toBeTruthy()
+  })
+
   test('CLEANUP-21: Delete test story via UI', async ({ page }) => {
     if (!storyId) test.skip()
     await uiLogin(page)

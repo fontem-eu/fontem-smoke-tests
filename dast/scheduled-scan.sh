@@ -54,6 +54,28 @@ done
 log "Starting a new ZAP session"
 curl -sf --max-time 30 "$ZAP/JSON/core/action/newSession/?name=scan-$(date -u +%Y%m%d-%H%M)&overwrite=true" >/dev/null
 
+# ── Scope: our host, and only our host ──────────────────────
+#
+# The suite drives a real browser, and the login page embeds
+# Sign-in-with-Google. So accounts.google.com and ssl.gstatic.com flow
+# through the proxy, and ZAP passively scanned them: the 2026-09-01
+# report carried 25 instances across six alert types — "CSP: Wildcard
+# Directive", "script-src unsafe-eval", "Strict-Transport-Security
+# Header Not Set" and friends — every one of them a finding about
+# GOOGLE's headers, not ours. They are not ours to fix, they are not
+# ours to track, and actively probing a third party's sign-in endpoint
+# is not something this scan should be doing at all.
+#
+# Restrict the context to the target and tell the passive scanner to
+# stay in it. The active scan was already aimed at $TARGET_CAPI; this
+# closes the passive side.
+SCOPE_RE=$(python3 -c "import re,sys,urllib.parse;print(urllib.parse.quote(re.escape(sys.argv[1])+'.*'))" "$TARGET")
+curl -sf --max-time 30 "$ZAP/JSON/context/action/includeInContext/?contextName=Default%20Context&regex=$SCOPE_RE" >/dev/null \
+    || { log "FATAL: could not scope the ZAP context to $TARGET"; exit 1; }
+curl -sf --max-time 30 "$ZAP/JSON/pscan/action/setScanOnlyInScope/?onlyInScope=true" >/dev/null \
+    || { log "FATAL: could not restrict passive scanning to scope"; exit 1; }
+log "Scope limited to $TARGET (passive scanning in-scope only)"
+
 # ── Traffic: drive the smoke suite through the proxy ────────
 log "Ensuring test users exist"
 for U in '{"email":"researcher@fontem.eu","password":"TestPass123!","name":"Test User"}' \

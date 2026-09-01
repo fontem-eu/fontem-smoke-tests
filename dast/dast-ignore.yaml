@@ -58,6 +58,34 @@ ignore:
     # or exploding by an order of magnitude — not that variance. Sized at
     # roughly 2x the highest observed count.
     #
+    # Re-verified 2026-09-01 against the dast environment, on the CURRENT
+    # parameter set rather than on trust. The 2026-07-30 triage covered
+    # `lang` and `spec`; the alert has since spread to params that plausibly
+    # do reach a query engine — `title`, `name`, `query`, `role`, `email`,
+    # `report_id`, `iri` — so each was probed directly with a benign value,
+    # a bare single quote, true/false boolean conditions, `OR pg_sleep(5)`
+    # and a stacked `; SELECT pg_sleep(5)`:
+    #
+    #   POST /auth/login            email  — all six byte-identical 401s
+    #                                        (same md5, len 38), 262-284ms
+    #   PUT  /data-stories/<id>     title  — 200, 24-31ms
+    #   PUT  /studio/projects/<id>  name   — 200, 30-32ms
+    #   POST /studio/.../queries    query  — 201, 23-32ms
+    #   GET  /data-stories/<id>?lang=      — 422, 7-9ms
+    #   POST /investigations/<id>/members role — 400, 8-11ms
+    #
+    # Not one payload delayed a response: pg_sleep(5) and the stacked
+    # variant returned in tens of milliseconds everywhere, which they
+    # cannot do if they reach SQL. Response LENGTHS do vary between
+    # payloads, and that is what ZAP's differ is reading — the endpoints
+    # echo the value back (422 validation errors quote the input, PUTs
+    # return the stored object), so the body grows with the payload. A
+    # bare single quote never produced a 500 anywhere.
+    #
+    # Also covered here: `file` and `type` on /upload, where ZAP's
+    # "payloads" are a JFIF header and the EICAR string — multipart
+    # bodies being mangled into SQL probes.
+    #
     # Re-triage evidence: all 167 SQLi/Path-Traversal instances in the
     # 2026-08-03 run were on one host, all under /capi/, all with empty
     # `evidence`, spread over 24 endpoints — the same ignored-parameter
@@ -78,6 +106,21 @@ ignore:
       ignored-parameter artefact as the SQL Injection entry above.
     added: 2026-07-30
     url_regex: "/capi/"
+    # Re-verified 2026-09-01 against the dast environment. The 12 current
+    # instances are on stored-string params (`abstract`, `name`, `title`,
+    # `anchor`, `email`) and two numeric ones (`x`, `y`), all still with
+    # empty evidence and Low confidence. Probed directly: sending
+    # `../../../../etc/passwd`, `/etc/passwd`, `....//....//etc/passwd`
+    # and a Windows variant as a studio project name stored and echoed
+    # each one verbatim, with no file content in any response (no
+    # `root:x:`, no `daemon:`, no `[extensions]`).
+    #
+    # Structural check as well as behavioural: the community API exposes
+    # no endpoint that takes a filename or path as a parameter — the
+    # openapi surface has none, and uploads are addressed by generated
+    # object keys, not by user-supplied names. There is nothing here for
+    # a traversal to traverse.
+    #
     # 37 on a 3,151-message run, 50 on a 4,232-message one. Same
     # traffic-variance reasoning as the SQL Injection rule above.
     max_instances: 90
@@ -148,3 +191,85 @@ ignore:
     added: 2026-08-03
     max_instances: 3
 
+  # ── CSP: one header, reported once per URL ────────────────────────────
+  #
+  # These two are the same fact 52 times. ZAP evaluates the
+  # Content-Security-Policy response header on every page it sees, so one
+  # header on 52 routes is 52 findings — and every route we add mints more
+  # NEW ones, which is a gate failure by rule 2 regardless of severity.
+  # That is what failed the promote gate on 2026-09-01: eight "new"
+  # findings, all of them the same reviewed header appearing on the
+  # server-rendered story pages that had just shipped.
+  #
+  # Suppressing a Medium this broad needs a compensating control, and
+  # there is one: smoke test CSP-1 pins the header directive by directive
+  # — script-src carries no unsafe-inline and no unsafe-eval, object-src
+  # and frame-ancestors are 'none', base-uri and form-action are 'self',
+  # and style-src is asserted verbatim. A weakened policy fails that test
+  # on every environment before it can hide behind this entry. The header
+  # is reviewed where it is a diff, not where it is 52 scanner rows.
+  - alert: "CSP: style-src unsafe-inline"
+    url_regex: "^https://fontem\\.(dast|testing|staging)\\.void42\\.internal"
+    reason: >-
+      Accepted risk, documented in fontem-web/security-headers.conf and
+      pinned by smoke test CSP-1. Reported per URL, so the count tracks
+      how many routes the suite visited, not how many problems exist.
+    evidence: >-
+      Measured 2026-09-01 by serving the real app under `style-src 'self'`
+      (CSP rewritten in-flight, violations collected from the browser's
+      securitypolicyviolation event) across /, /about, /login and /atlas.
+      The only violations were our own 28 static `style="…"` attributes,
+      which SSR emits into the markup, and the styles that
+      accounts.google.com/gsi/client injects from its own script — which
+      we cannot nonce because we do not control that script. Zero came
+      from a Vue `:style` binding: Vue applies those through CSSOM, which
+      CSP does not govern, so the note that used to claim 21 components
+      required this keyword was wrong and has been corrected. The keyword
+      cannot go while the Google button is on /login, whatever we do to
+      the static attributes. Compensating controls: script-src is 'self'
+      plus hashes only, every v-html site is DOMPurify-sanitised, nosniff
+      is set.
+    added: 2026-09-01
+    # 52 instances on the 2026-09-01 run, one per route the suite reached.
+    # Sized at roughly 2x so ordinary route growth does not re-fire it,
+    # while a class change — this alert appearing on a new host, or the
+    # count exploding — still does.
+    max_instances: 120
+
+  - alert: "CSP: Notices"
+    url_regex: "^https://fontem\\.(dast|testing|staging)\\.void42\\.internal"
+    reason: >-
+      The parser-notice half of the same per-URL CSP evaluation as the
+      entry above, on the same reviewed header, pinned by the same CSP-1
+      test.
+    evidence: >-
+      Identical instance count and identical URL set to the style-src
+      entry above (52 and 52 on the 2026-09-01 run), carrying the same
+      header as evidence and an empty otherinfo. It is the same header
+      being counted twice, once per sub-rule.
+    added: 2026-09-01
+    max_instances: 120
+
+  # ── Numeric constants in a minified bundle ───────────────────────────
+  - alert: Timestamp Disclosure - Unix
+    url_regex: "/assets/"
+    reason: >-
+      Ten-digit integers inside minified JavaScript, read as Unix
+      timestamps by a regex. They are constants in the bundled DuckDB
+      WASM loader, not disclosed times.
+    evidence: >-
+      19 of the 22 instances on 2026-09-01 were in
+      /assets/duckdb-browser-eh.worker-CwdVMcbT.js, the rest in
+      /assets/index-*.js and /assets/duckdb-browser-*.js. The "timestamps"
+      are values like 2080374784 (0x7C000000) and 1836278016 — bit masks
+      and hash seeds in third-party minified code, not dates: 2080374784
+      reads as 2035-12-25 and 1508970993 as 2017-10-25, spread that no
+      real clock produces in one file. Scoped to /assets/ deliberately:
+      the same alert on an API response is a real value in our data and
+      still fails the gate.
+    added: 2026-09-01
+    # Asset filenames are content-hashed, so EVERY rebuild changes the URL
+    # and mints new keys — this alert is a standing "new finding" source
+    # on any build that touches the bundle, which is what makes it worth
+    # an entry rather than a re-triage each release.
+    max_instances: 50
