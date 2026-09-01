@@ -2256,12 +2256,18 @@ test.describe.serial('Production Smoke Tests', () => {
     // as the only acceptable action, and forbidding the narration explicitly,
     // removes the interpretation it kept choosing. This is a clearer
     // instruction, not a weaker assertion: the test still requires a real
-    // propose_edit, a real Apply, and the marker landing in the editor.
+    // tool call, a real Apply, and the marker landing in the editor.
+    //
+    // read_document first because replace_body requires it: the
+    // blind-rewrite guard in tool_runtime refuses a whole-body rewrite
+    // from a model that has not read what it is replacing. The prompt
+    // has to ask for the pair, or the gate tests the guard instead of
+    // the editor.
     await sendAssistMessage(page,
-      `Call the propose_edit tool now with action="insert_content" and content ` +
-      `set to a single short paragraph containing the exact string ${marker}. ` +
-      'Do not answer in prose. Do not say the edit is done. ' +
-      'The only acceptable action is the propose_edit tool call itself.')
+      `Call the read_document tool, then call the replace_body tool with ` +
+      `content set to a single short paragraph containing the exact string ` +
+      `${marker}. Do not answer in prose. Do not say the edit is done. ` +
+      'The only acceptable action is the tool calls themselves.')
 
     // The card renders the moment the proposal event arrives (mid-stream),
     // but wait for the turn to settle anyway: the window used to be
@@ -2340,15 +2346,22 @@ test.describe.serial('Production Smoke Tests', () => {
     // it automatically — no Apply button is rendered, and the
     // "Applied automatically" badge shows instead.
     //
-    // Name the actual tool (propose_edit / action=update_title) — the
-    // assistant's system prompt refuses anything that asks for a tool
-    // it doesn't expose ("set_title" was a stale name that survived a
-    // mcp-server rename; the assistant pushes back instead of
+    // Name the actual tool — the assistant refuses anything that asks
+    // for a tool it doesn't expose, and pushes back instead of
     // hallucinating the call, which is the correct behaviour we just
-    // can't smoke-test for here).
+    // can't smoke-test for here.
+    //
+    // That tool is `set_title`. This comment used to say the opposite,
+    // word for word: that set_title was "a stale name that survived a
+    // mcp-server rename" and propose_edit was the real one. The surface
+    // swung back — propose_edit was retired in favour of one verb per
+    // job — and the prompt sat naming a withdrawn tool for as long as
+    // the lint that should have caught it was mirroring a deleted file.
+    // Check tests/prompt-lint.test.js against the server before
+    // trusting either name, including this one.
     const bypassTitle = `Bypass smoke ${RUN_ID.slice(0, 8)}`
     await sendAssistMessage(page,
-      `Use the propose_edit tool with action="update_title" to set the report ` +
+      `Use the set_title tool to set the report ` +
       `title to "${bypassTitle}". Reply with just "ok" after calling the tool.`)
 
     // The Applied-automatically badge proves the bypass path ran.
@@ -3119,9 +3132,10 @@ test.describe.serial('Production Smoke Tests', () => {
     // end — the model echoes it because we ask explicitly.
     const marker = `RT-${RUN_ID.slice(0, 8)}`
     await sendAssistMessage(page,
-      `Use propose_edit with action="insert_content" to add a brief one-paragraph ` +
-      `note about Apple Inc. (AAPL) to this report. The paragraph MUST contain ` +
-      `the literal string ${marker}. One paragraph total — keep it short.`)
+      `Use the read_document tool, then the replace_body tool, to make this ` +
+      `report a brief one-paragraph note about Apple Inc. (AAPL). The ` +
+      `paragraph MUST contain the literal string ${marker}. One paragraph ` +
+      `total — keep it short.`)
 
     // A proposal must arrive. If it doesn't, the model picked the wrong
     // tool — that's a regression we want loud, not silent.
