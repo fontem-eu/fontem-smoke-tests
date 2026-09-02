@@ -45,7 +45,12 @@ export default defineConfig({
       name: 'chromium',
       // Desktop suite covers tests/{smoke,auth-helper,consolidator,i18n}.spec.js
       // — the mobile spec is opted out via the matcher below.
-      testMatch: /(assist-conversations|atlas-widget|smoke|auth-helper|consolidator|i18n|pocket-story|investigations|investigation-stories|investigation-viz|permissions-matrix|dossiers|data-studio|articles|translations)\.spec\.js$/,
+      // `seo` is in the desktop project only because the project has to
+      // own it somewhere — it drives no browser at all. Every assertion
+      // there goes through request.get(), which is raw HTML with no
+      // JavaScript executed: exactly what GPTBot, ClaudeBot,
+      // PerplexityBot and CCBot see.
+      testMatch: /(assist-conversations|atlas-widget|smoke|auth-helper|consolidator|i18n|pocket-story|investigations|investigation-stories|investigation-viz|permissions-matrix|dossiers|data-studio|articles|translations|seo)\.spec\.js$/,
       use: { ...devices['Desktop Chrome'] },
     },
     {
