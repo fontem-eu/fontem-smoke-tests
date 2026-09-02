@@ -56,6 +56,7 @@ const OFFERED_TOOLS = new Set([
   'set_abstract',
   'replace_body',
   'insert_widget',
+  'insert_studio_plot',
   'query_graph',
   'calculate',
   // engine_tools.OFFERED_GENERATED
