@@ -19,16 +19,16 @@ import { test, expect } from '@playwright/test'
 // Three locales, each with one label the user actually sees on the
 // landing page. Pinned against src/locales/<code>.json in fontem-web.
 //
-// `titleContains` is the localised tagline: the home <title> became
-// "Fontem — <tagline>" when the tagline shipped, so the old expectation
-// (the feed heading) no longer appears in the title at all. The tagline
-// is translated per locale, so this still fails on a missing
-// translation rather than silently passing on an English fallback —
-// which is the whole point of asserting it per locale.
+// `titleContains` is the localised motto: the home <title> is
+// "Dargle — <motto>", so the old expectation (the feed heading) does
+// not appear in the title at all. The motto is translated per locale,
+// so this still fails on a missing translation rather than silently
+// passing on an English fallback — which is the whole point of
+// asserting it per locale.
 const LOCALES = [
   {
     code: 'de',
-    titleContains: 'Die digitalen Grenzen der EU überwinden',
+    titleContains: 'Entdecken. Argumentieren. Lernen. Genießen.',
     feedSubContains: 'Öffentliche Datengeschichten der Community',
     pluralZero: 'keine Aufträge',
     pluralOne: '1 Auftrag',
@@ -36,7 +36,7 @@ const LOCALES = [
   },
   {
     code: 'fr',
-    titleContains: "Franchir les frontières numériques de l'UE",
+    titleContains: 'Découvrez. Argumentez. Apprenez. Profitez.',
     feedSubContains: 'Histoires de données publiques',
     pluralZero: 'aucun marché',
     pluralOne: '1 marché',
@@ -44,7 +44,7 @@ const LOCALES = [
   },
   {
     code: 'pt',
-    titleContains: 'A atravessar as fronteiras digitais da UE',
+    titleContains: 'Descubra. Argumente. Aprenda. Desfrute.',
     feedSubContains: 'Histórias com dados públicas',
     pluralZero: 'sem contratos',
     pluralOne: '1 contrato',
@@ -70,7 +70,7 @@ test('English landing renders without hydration crash', async ({ page }) => {
   // Hydration wipes #app to empty on the regression that motivated this
   // test — the bundle must keep the SSR HTML reactive.
   await expect(page.getByTestId('app-nav')).toBeVisible()
-  await expect(page).toHaveTitle(/Fontem/)
+  await expect(page).toHaveTitle(/Dargle/)
 
   // The three plural badges from I18nPluralProbe are the canonical
   // "did vue-i18n hydrate at all" check — strings the unit tests pin.
