@@ -76,6 +76,14 @@ const OFFERED_TOOLS = new Set([
   'studio_update_plot',
 ])
 
+// The scripted model's scenarios, mirrored from `SCRIPTS` in
+// fontem-community-api src/assistant/mock_llm.py. A prompt saying
+// "E2E-SCENARIO: <name>" for a name that registry does not define gets
+// the fallback reply ("no scenario requested") and the test then fails
+// on a missing proposal — the same class of mistake as naming a tool the
+// server does not offer, and just as expensive to read from a gate log.
+const SCENARIOS = new Set(['toolchain', 'marathon', 'echo', 'edit'])
+
 // Retired: implemented for stored conversations, never offered. Naming
 // one in a prompt is the specific mistake this file exists to catch, so
 // it earns its own message rather than "unknown tool".
@@ -106,10 +114,31 @@ function retiredMentions(source) {
   return [...RETIRED_TOOLS].filter((t) => new RegExp(`\\b${t}\\b`).test(text))
 }
 
+/** Every scripted-model scenario a prompt asks for. */
+function scenarioReferences(source) {
+  return [...promptSource(source).matchAll(/E2E-SCENARIO:\s*([a-z_]+)/g)]
+    .map((m) => m[1])
+}
+
 describe('smoke prompt tool references', () => {
-  it('names at least one tool — the spec has not moved out from under us', () => {
-    assert.ok(toolReferences(SMOKE_SPEC).length > 0,
-      'no "Use/Call the X tool" references found — did the smoke spec move?')
+  it('still instructs the model somehow — the spec has not moved out from under us', () => {
+    // Either phrasing counts. Prompts that name tools in prose are for
+    // the real model; E2E-SCENARIO markers drive the scripted one. The
+    // suite moved largely to the second when the model-driven tests left
+    // the gate, and a canary that only knew the first would have gone
+    // quietly blind — which is the failure this whole file is about.
+    const total = toolReferences(SMOKE_SPEC).length + scenarioReferences(SMOKE_SPEC).length
+    assert.ok(total > 0,
+      'no "Use/Call the X tool" references and no E2E-SCENARIO markers found — did the smoke spec move?')
+  })
+
+  it('every E2E-SCENARIO names a script the mock model defines', () => {
+    const unknown = [...new Set(scenarioReferences(SMOKE_SPEC))]
+      .filter((n) => !SCENARIOS.has(n))
+    assert.deepEqual(unknown, [],
+      `smoke prompts ask for scenario(s) the scripted model does not define: ${unknown.join(', ')}. `
+      + 'Mirror SCRIPTS in fontem-community-api src/assistant/mock_llm.py, or fix the marker — '
+      + 'an unknown name silently gets the "no scenario requested" reply.')
   })
 
   it('never orders the model to call a retired tool', () => {
