@@ -273,3 +273,36 @@ ignore:
     # on any build that touches the bundle, which is what makes it worth
     # an entry rather than a re-triage each release.
     max_instances: 50
+
+  - alert: PII Disclosure
+    reason: >-
+      ZAP reads Luhn-valid digit runs inside UUID path segments as credit
+      card numbers. The flagged documents are entity sitemaps that contain
+      nothing but <loc> URLs, so there is no PII in them to disclose.
+      Verified against the dast environment 2026-09-04, not assumed.
+    evidence: >-
+      All three flagged documents were fetched and parsed: every single
+      <loc> is https://<host>/company/<uuid> and the only tags present are
+      <url>, <loc>, <lastmod>, <changefreq>. Non-UUID <loc> count is 0 in
+      FRA (352 urls), IRL (444) and LUX (534) — no names, no emails, no
+      identifiers beyond the UUID and an ISO date. The trigger was then
+      reproduced directly: stripping hyphens and scanning each UUID for a
+      13-19 digit run that passes a Luhn check finds exactly one in FRA,
+      two in IRL and one in LUX, which is why those three documents
+      alerted and the other 29 country shards did not. Example:
+      b689f28b-1c0f-51ab-8222-889709694609 contains 8222889709694609,
+      sixteen digits and Luhn-valid, i.e. indistinguishable from a card
+      number to a regex. The UUIDs are content-addressable gmr_ids
+      (src/etl/gmr_id.py), so this will recur as the corpus grows.
+    added: 2026-09-04
+    # Scoped to the entity sitemaps, which are machine-generated and
+    # provably contain only URLs. PII Disclosure anywhere else — an API
+    # response, a story body, a profile — is NOT covered and must fail
+    # the gate. That is the whole point of the narrow url_regex.
+    url_regex: "/sitemap-(companies|authorities)-[A-Z]{3}\\.xml$"
+    method: GET
+    # 3 observed on 2026-09-04 across 32 company shards + 32 authority
+    # shards. Sized at 20 so ordinary corpus growth does not trip it while
+    # a CLASS change still does: a real PII leak across the shards would
+    # blow past this and demand re-triage rather than being absorbed.
+    max_instances: 20
