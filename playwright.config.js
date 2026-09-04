@@ -50,7 +50,7 @@ export default defineConfig({
       // there goes through request.get(), which is raw HTML with no
       // JavaScript executed: exactly what GPTBot, ClaudeBot,
       // PerplexityBot and CCBot see.
-      testMatch: /(assist-conversations|atlas-widget|smoke|auth-helper|consolidator|i18n|pocket-story|investigations|investigation-stories|investigation-viz|permissions-matrix|dossiers|data-studio|articles|translations|seo)\.spec\.js$/,
+      testMatch: /(assist-conversations|atlas-widget|smoke|auth-helper|consolidator|i18n|pocket-story|investigations|investigation-stories|investigation-viz|permissions-matrix|dossiers|data-studio|articles|translations|seo|briefings)\.spec\.js$/,
       use: { ...devices['Desktop Chrome'] },
     },
     {
