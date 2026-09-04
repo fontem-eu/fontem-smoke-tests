@@ -213,3 +213,107 @@ test.describe('briefings', () => {
     await context.close()
   })
 })
+
+/**
+ * Where a briefing card takes you.
+ *
+ * A card whose headline is a fact about a contract, a company or a
+ * lobbying declaration is only half the story: the reader has to be able
+ * to reach the record. These links come from the named query that found
+ * the item (its `link` column), so they are data, not markup — which is
+ * exactly why they need an end-to-end check. The failure mode is silent:
+ * a query emitting a truncated path still renders a perfectly clickable
+ * card that lands nowhere, and that is what shipped.
+ *
+ * Reads the REAL briefings, not the synthetic fixture above: that
+ * fixture's rows link to /briefings, so they would prove nothing about
+ * entity routing.
+ *
+ * Runs signed OUT, in a context without the suite's storageState. That
+ * is the product promise being checked — a stranger's first visit gets
+ * the public-investment seed rather than an empty page — and it is the
+ * path with the most links to follow.
+ */
+test.describe('briefing card links', () => {
+  test.setTimeout(120_000)
+
+  /** Entity routes a briefing item is allowed to point at. */
+  const ENTITY_PATH = /^\/(contract|company|authority|lobbyist)\/[^/]+/
+
+  /** A genuinely signed-out page: no storageState, no bootstrap token. */
+  async function anonymousPage(browser) {
+    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } })
+    const page = await ctx.newPage()
+    await page.goto('/')
+    await expect(page.locator('[data-testid="feed-briefings"]')).toBeVisible({ timeout: 30_000 })
+    return { ctx, page }
+  }
+
+  test('BRIEF-LINK-1: the landing feed carries briefing cards for a stranger', async ({ browser }) => {
+    // The signed-out seed is a product promise. If it is empty the rest
+    // of this group is vacuous, so it fails here loudly rather than
+    // letting the others pass over no data.
+    const { ctx, page } = await anonymousPage(browser)
+    const cards = page.locator('li[data-testid^="feed-briefing-"]')
+    expect(await cards.count(), 'the signed-out landing feed seeded no briefing items')
+      .toBeGreaterThan(0)
+    await ctx.close()
+  })
+
+  test('BRIEF-LINK-2: every card link is an in-app entity path, never the baked-in origin', async ({ browser }) => {
+    // The queries hard-code an absolute origin, so a card rendered as a
+    // raw href sends a reader on staging to production. Every link must
+    // have been reduced to a path first.
+    const { ctx, page } = await anonymousPage(browser)
+    const links = page.locator('[data-testid^="feed-briefing-link-"]')
+    const n = await links.count()
+    expect(n, 'no briefing card offered a destination').toBeGreaterThan(0)
+    for (let i = 0; i < n; i++) {
+      const href = await links.nth(i).getAttribute('href')
+      expect(href, `card ${i} rendered as a link with no href`).toBeTruthy()
+      expect(href, `card ${i} points off-site: ${href}`).toMatch(ENTITY_PATH)
+    }
+    await ctx.close()
+  })
+
+  test('BRIEF-LINK-3: following a card lands on the record, not a 404', async ({ browser }) => {
+    // The bug this pins: a query emitting '<origin>/company/' with the id
+    // coalesced away renders a clickable card that resolves to nothing.
+    const { ctx, page } = await anonymousPage(browser)
+    const first = page.locator('[data-testid^="feed-briefing-link-"]').first()
+    await expect(first).toBeVisible({ timeout: 10_000 })
+    const href = await first.getAttribute('href')
+    await first.click()
+    await page.waitForURL((u) => u.pathname === href.split('?')[0], { timeout: 15_000 })
+
+    // The SPA answers 200 for every path, so "did it 404" is a DOM
+    // question rather than a status-code one.
+    await expect(page.locator('.notfound-code')).toHaveCount(0)
+
+    // And the record itself rendered, per destination type.
+    const path = new URL(page.url()).pathname
+    if (path.startsWith('/contract/')) {
+      await expect(page.locator('[data-testid="contract-detail"]')).toBeVisible({ timeout: 20_000 })
+    } else if (path.startsWith('/lobbyist/')) {
+      await expect(page.locator('[data-testid="lobbyist-name"]')).toBeVisible({ timeout: 20_000 })
+    } else {
+      await expect(page.locator('[data-testid="ticker-detail"]')).toBeVisible({ timeout: 20_000 })
+    }
+    await ctx.close()
+  })
+
+  test('BRIEF-LINK-4: a card with no resolvable record is not a dead click', async ({ browser }) => {
+    // ~4 in 5 register entrants resolve to no company we hold. Those
+    // items are still news, so they render — as text, not as a link into
+    // nothing.
+    const { ctx, page } = await anonymousPage(browser)
+    const anchors = page.locator('[data-testid="feed-briefings"] a')
+    const n = await anchors.count()
+    for (let i = 0; i < n; i++) {
+      const href = await anchors.nth(i).getAttribute('href')
+      expect(href, `dead link rendered: ${href}`)
+        .not.toMatch(/\/(company|contract|lobbyist|authority)\/?$/)
+    }
+    await ctx.close()
+  })
+})

@@ -270,7 +270,11 @@ test.describe.serial('Production Smoke Tests', () => {
     // Go BACK to the feed via the global nav (Stories link), NOT the
     // browser back button — that's the path that drops the URL query
     // and was the original bug surface.
-    await page.locator('[data-testid="nav-stories"]').click()
+    // nav-feed, not nav-stories: the mixed landing feed is what was
+    // filtered above. Stories moved to its own route (fontem-web #498),
+    // so clicking it would leave `/` and prove nothing about the filter
+    // surviving a round trip.
+    await page.locator('[data-testid="nav-feed"]').click()
     await page.waitForURL(/\/(\?.*)?$/, { timeout: 10_000 })
     // The persisted tag should be re-applied via router.replace, so
     // the URL carries `?tag=<seedTag>` and the filter banner is back.
