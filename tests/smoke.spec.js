@@ -270,8 +270,14 @@ test.describe.serial('Production Smoke Tests', () => {
     // Go BACK to the feed via the global nav (Stories link), NOT the
     // browser back button — that's the path that drops the URL query
     // and was the original bug surface.
+    //
+    // Since #498 the Stories nav entry points at /stories-feed (the
+    // articles-only feed); `/` is now the mixed landing feed under a
+    // separate "Feed" entry. The restore itself is route-agnostic —
+    // FeedView replaces onto `route.path` — so the tag assertion below
+    // is unchanged, only the destination moved.
     await page.locator('[data-testid="nav-stories"]').click()
-    await page.waitForURL(/\/(\?.*)?$/, { timeout: 10_000 })
+    await page.waitForURL(/\/stories-feed(\?.*)?$/, { timeout: 10_000 })
     // The persisted tag should be re-applied via router.replace, so
     // the URL carries `?tag=<seedTag>` and the filter banner is back.
     await expect(page).toHaveURL(new RegExp(`[?&]tag=${seedTag}(&|$)`), { timeout: 5_000 })

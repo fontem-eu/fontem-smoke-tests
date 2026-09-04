@@ -120,6 +120,14 @@ for (const loc of LOCALES) {
 
     // A second i18n-driven label that lives in body content — proves
     // template strings (not just <head>) re-render.
+    //
+    // It lives on /stories-feed, not on `/`. Since #498 the landing
+    // feed is the MIXED one (articles + briefings) and deliberately
+    // drops this subtitle, because "public data stories" is only true
+    // of the stories-only page. The plural probes above still work
+    // here: I18nPluralProbe is mounted in App.vue, so it is on every
+    // route, which is also why the reload assertions below still hold.
+    await page.goto('/stories-feed', { waitUntil: 'networkidle' })
     const feedSub = page.locator('.feed-sub').first()
     await expect(feedSub).toContainText(loc.feedSubContains)
 
