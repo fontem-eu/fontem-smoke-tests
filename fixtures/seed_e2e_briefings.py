@@ -58,21 +58,28 @@ SEED_SUB = "e2e-briefings-fixture"
 SEED_ID = str(uuid.uuid5(uuid.NAMESPACE_URL, SEED_SUB))
 SEED_EMAIL = "e2e-briefings-fixture@fontem.internal"
 
-# Dates are relative to today so the fixture never ages out of the runner's
-# window. Regions are deliberately nested — PT165 is inside PT16 is inside PT —
-# so a prefix filter has something to actually discriminate.
+# Dates are relative to today, and the DAY IS PART OF THE item_id, so the
+# fixture genuinely never ages out. Without the day in the id it did:
+# feed_items upserts ON CONFLICT DO NOTHING (to protect first_seen_at), so
+# a row keeps the item_time it was first collected with no matter how
+# often the query re-runs. The dates froze at first collection and drifted
+# out of the runner's FEED_WEEKS window, and every edit to the rows below
+# — a region, a value — was silently ignored for the same reason.
+#
+# Regions are deliberately nested — PT192 is inside PT19 is inside PT — so
+# a prefix filter has something to actually discriminate.
 QUERY = """UNWIND [
-  {n: 1, region: 'PT165', value: 4200000.0},
+  {n: 1, region: 'PT192', value: 4200000.0},
   {n: 2, region: 'PT150', value: 1750000.0},
   {n: 3, region: 'ES300', value: 980000.0},
   {n: 4, region: 'DE300', value: 12500000.0},
-  {n: 5, region: 'PT17',  value: 640000.0}
+  {n: 5, region: 'PT1A',  value: 640000.0}
 ] AS f
 WITH f, toString(date() - duration({days: f.n})) AS day
 WHERE day > left($since, 10)
   AND ('EU' IN $nuts OR any(p IN $nuts WHERE f.region STARTS WITH p))
 RETURN
-  'smoke-fixture:' + toString(f.n) AS item_id,
+  'smoke-fixture:' + toString(f.n) + ':' + day AS item_id,
   day AS item_time,
   [f.region] AS nuts,
   f.value AS rank_value,

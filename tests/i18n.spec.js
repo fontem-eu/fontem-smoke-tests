@@ -29,7 +29,7 @@ const LOCALES = [
   {
     code: 'de',
     titleContains: 'Entdecken. Argumentieren. Lernen. Genießen.',
-    feedSubContains: 'Öffentliche Datengeschichten der Community',
+    feedSubContains: 'Datengeschichten und Briefing-Funde',
     pluralZero: 'keine Aufträge',
     pluralOne: '1 Auftrag',
     pluralMany: '5 Aufträge',
@@ -37,7 +37,7 @@ const LOCALES = [
   {
     code: 'fr',
     titleContains: 'Découvrez. Argumentez. Apprenez. Profitez.',
-    feedSubContains: 'Histoires de données publiques',
+    feedSubContains: 'Histoires de données et conclusions',
     pluralZero: 'aucun marché',
     pluralOne: '1 marché',
     pluralMany: '5 marchés',
@@ -45,7 +45,7 @@ const LOCALES = [
   {
     code: 'pt',
     titleContains: 'Descubra. Argumente. Aprenda. Desfrute.',
-    feedSubContains: 'Histórias com dados públicas',
+    feedSubContains: 'Histórias com dados e achados',
     pluralZero: 'sem contratos',
     pluralOne: '1 contrato',
     pluralMany: '5 contratos',
@@ -120,6 +120,11 @@ for (const loc of LOCALES) {
 
     // A second i18n-driven label that lives in body content — proves
     // template strings (not just <head>) re-render.
+    // `/` is the MIXED landing feed, so its subtitle names both halves —
+    // articles and briefing findings. The stories-only page at
+    // /stories-feed keeps the older "public data stories" wording; these
+    // expectations follow the landing page because that is where this
+    // test navigates.
     const feedSub = page.locator('.feed-sub').first()
     await expect(feedSub).toContainText(loc.feedSubContains)
 
