@@ -76,8 +76,21 @@ async function createNamedChat(page, name) {
   await page.locator('[data-testid="assist-conversation-rename"]').first().click()
   const input = page.locator('[data-testid="assist-conversation-rename-input"]')
   await input.fill(name)
+
+  // Wait on the rename REQUEST, not just on the row appearing. Enter
+  // fires a PATCH and the list re-renders from its response; waiting
+  // only for the row gave a refused or slow PATCH the same symptom —
+  // "resolved to 0 elements" — with nothing to say which it was. At the
+  // default 5s that lost a run roughly one time in five.
+  const renamed = page.waitForResponse(
+    (r) => /\/assist\/conversations\/[^/]+$/.test(new URL(r.url()).pathname)
+      && r.request().method() === 'PATCH',
+    { timeout: 20_000 },
+  )
   await input.press('Enter')
-  await expect(rowByName(page, name)).toHaveCount(1)
+  const resp = await renamed
+  expect(resp.ok(), `renaming the chat was refused: HTTP ${resp.status()}`).toBeTruthy()
+  await expect(rowByName(page, name)).toHaveCount(1, { timeout: 15_000 })
   return name
 }
 
@@ -91,16 +104,30 @@ async function createNamedChat(page, name) {
  * behaviour under test, and driving 80 deletes through the UI would dominate
  * the suite's runtime.
  *
- * Only message-less chats are removed. A conversation someone actually used
- * has messages, so this cannot touch real history.
+ * Empty chats are removed outright. Used ones are TRIMMED to the newest
+ * KEEP_NEWEST, which is the part the original purge missed: it only ever
+ * deleted message-less rows, so every chat an assistant test actually
+ * talked to survived forever. The list reached 1,180 rows — fourteen
+ * times the 80 that first broke these assertions — and CHAT-ISO-02
+ * started failing roughly one run in five, with the rename returning 200
+ * while the row never appeared. The switcher fetches and renders the
+ * whole list, so this got slower and less reliable every single run.
+ *
+ * Trimming is bounded and deterministic rather than age-based: the list
+ * cannot grow past KEEP_NEWEST no matter how often the suite runs.
  */
+const KEEP_NEWEST = 40
+
 async function purgeEmptyChats(request) {
   const auth = { Authorization: `Bearer ${ownerToken()}` }
   const listed = await request.get('/capi/assist/conversations', { headers: auth })
   if (!listed.ok()) return 0
-  const empty = (await listed.json()).conversations.filter((c) => c.message_count === 0)
+  // The API returns newest activity first, so anything past KEEP_NEWEST is
+  // older than the window this suite needs.
+  const all = (await listed.json()).conversations
+  const doomed = all.filter((c, i) => c.message_count === 0 || i >= KEEP_NEWEST)
   let removed = 0
-  for (const c of empty) {
+  for (const c of doomed) {
     const r = await request.delete(
       `/capi/assist/conversations/${encodeURIComponent(c.conversation_key)}`,
       { headers: auth },

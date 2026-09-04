@@ -236,7 +236,16 @@ test.describe('Permissions matrix (UI)', () => {
       await expect(page.locator('[data-testid="dossier-share-modal"]')).toBeVisible({ timeout: 10_000 })
       await page.fill('[data-testid="share-email-input"]', x.email)
       await page.selectOption('[data-testid="share-level"]', 'viewer')
+      // Same shape as PERM-UI-7: wait for the grant request itself, so a
+      // refusal reads as a refusal instead of a missing element.
+      const shared = page.waitForResponse(
+        (r) => /\/dossiers\/[^/]+\/access$/.test(new URL(r.url()).pathname)
+          && r.request().method() === 'POST',
+        { timeout: 20_000 },
+      )
       await page.click('[data-testid="share-add-btn"]')
+      const shareResp = await shared
+      expect(shareResp.ok(), `sharing the dossier was refused: HTTP ${shareResp.status()}`).toBeTruthy()
       await expect(page.locator('[data-testid^="share-access-"]', { hasText: x.email }))
         .toBeVisible({ timeout: 10_000 })
 
@@ -315,9 +324,24 @@ test.describe('Permissions matrix (UI)', () => {
       await expect(page.locator('[data-testid="studio-share-modal"]')).toBeVisible({ timeout: 10_000 })
       await page.fill('[data-testid="studio-share-email"]', x.email)
       await page.selectOption('[data-testid="studio-share-level"]', 'viewer')
+      // Wait on the CAUSE, not on a deadline. addPerson() POSTs the
+      // grant and then refreshes the list; if the POST is refused the
+      // modal catches it into `studio-share-error` and no row ever
+      // appears — which, waiting only for the row, is indistinguishable
+      // from the request merely being slow. Both surfaced as
+      // "element(s) not found" and cost a gate run to diagnose.
+      const granted = page.waitForResponse(
+        (r) => /\/studio\/projects\/[^/]+\/access$/.test(new URL(r.url()).pathname)
+          && r.request().method() === 'POST',
+        { timeout: 20_000 },
+      )
       await page.click('[data-testid="studio-share-add"]')
+      const grantResp = await granted
+      expect(grantResp.ok(), `granting access was refused: HTTP ${grantResp.status()}`).toBeTruthy()
+      await expect(page.locator('[data-testid="studio-share-error"]'), 'the modal reported an error')
+        .toHaveCount(0)
       await expect(page.locator('[data-testid="studio-grant"]', { hasText: x.email }))
-        .toBeVisible({ timeout: 10_000 })
+        .toBeVisible({ timeout: 15_000 })
       // after grant: outsider can open it read-only
       await openProject(xp.pg, pid)
       await expect(xp.pg.locator('[data-testid="project-readonly"]')).toBeVisible({ timeout: NAV })
