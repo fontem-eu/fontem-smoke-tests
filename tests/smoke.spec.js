@@ -4,6 +4,42 @@
  * Validates critical user flows through the UI — every test interacts
  * with the browser, no direct API calls.
  *
+ * WHAT BELONGS HERE, AND WHAT DOES NOT
+ * ------------------------------------
+ * This suite is a promotion gate, and it is serial (workers: 1), so
+ * every test here costs the gate wall-clock time that a component test
+ * costs nobody. A test earns its place only if it needs the deployed
+ * stack: real auth, real data, cross-service agreement, deployment
+ * config (headers, canonical), or a backend security gate.
+ *
+ * A test that only asserts how a component renders or reacts does NOT
+ * belong here — fontem-web runs 2,354 component tests in ~19s. The
+ * following were removed on 2026-09-04 because a component test
+ * already asserted the same behaviour, usually more thoroughly:
+ *
+ *   NAV-EXPLORE                     -> AppSidebar
+ *   FEED-TAG-PERSIST                -> useStoriesTagFilter, FeedView
+ *   SPARQL-EDITOR, -EXAMPLE-LOADER  -> SparqlView
+ *   PROC-CONTRACT-LINK              -> ContractsPanel
+ *   PROFILE-FIN-HIDDEN, -ANALYSIS-GONE -> HomeView
+ *   STORY-13, STORY-TOOLBAR-UNIFIED -> StoryEditorToolbar
+ *   STORY-TABLE-{CONTROLS,ROW-TRASH,LAST-DELETES-TABLE}
+ *                                   -> TableControlsOverlay
+ *   STORY-FLOWERS-2, -3             -> FlowerButton
+ *   ISSUE-16                        -> IssuesView
+ *   ATLAS-20                        -> AtlasView
+ *   ASSIST-NAV                      -> AssistPanelNavigate (11 cases)
+ *   ASSIST-BYPASS                   -> AssistPanelProposeEdit
+ *   ASSIST-28                       -> AssistPanelConversations
+ *   ASSIST-20                       -> applyFlowIntegration
+ *   ASSIST-ANON                     -> AssistPanelSignedOut
+ *   ASSIST-HISTORY                  -> AssistPanelToolHistory
+ *   ASSIST-26                       -> AssistPanelPagedHistory
+ *   CHAT-TABS-01..06                -> AssistPanelConversations
+ *
+ * Before adding a test here, ask whether a component test would catch
+ * the same regression. If it would, write it there instead.
+ *
  * Cadence:
  *   - prod: hourly via the fontem-smoke-tests CronJob (deployment/cronjob.yaml)
  *   - staging: same CronJob spec but suspended; invoked on demand by
@@ -145,152 +181,6 @@ test.describe.serial('Production Smoke Tests', () => {
 
   // ── Authentication ─────────────────────────────────────────────
 
-  test('NAV-EXPLORE: the nav rail links to the Explore hub, which opens Data Quality', async ({ page }) => {
-    // Batch-5 item 5: the user asked for an Explore entry grouping the
-    // data-quality dashboards (and other browse-by-source surfaces)
-    // under one nav item.
-    //
-    // Rewritten for the nav rail. Two things moved and this test kept
-    // asserting the old shape: the entry is `nav-data-stats` (it was
-    // `nav-explore`), and Explore now leads the data group with Atlas
-    // directly after it, rather than trailing Map. The href is the
-    // stable contract, so pin that and the adjacency, not a global
-    // index into every nav item.
-    await page.goto('/')
-    await demoMark(page, 'NAV-EXPLORE — verify the Explore entry')
-    const explore = page.locator('[data-testid="nav-data-stats"]')
-    await expect(explore).toBeVisible({ timeout: 10_000 })
-    await expect(explore).toHaveAttribute('href', '/explore')
-    const navHrefs = await page.locator('[data-testid^="nav-"]').evaluateAll(
-      (els) => els.map((e) => e.getAttribute('href')),
-    )
-    const mapIdx = navHrefs.indexOf('/map')
-    const explIdx = navHrefs.indexOf('/explore')
-    const dashIdx = navHrefs.indexOf('/data-quality')
-    expect(explIdx).toBeGreaterThanOrEqual(0)
-    // data group order: Explore → Dashboards → Atlas/Map (fontem-web #376)
-    expect(dashIdx).toBe(explIdx + 1)
-    expect(mapIdx).toBe(explIdx + 2)
-    await demoMark(page, 'Explore → Dashboards → Atlas order ✓', 2000)
-
-    // Click into the hub — the Data Quality card lands on /data-quality.
-    await explore.click()
-    await expect(page.locator('[data-testid="explore-view"]')).toBeVisible({ timeout: 10_000 })
-    const dqCard = page.locator('[data-testid="explore-card-data-quality"]')
-    await expect(dqCard).toBeVisible()
-    await dqCard.click()
-    await page.waitForURL('**/data-quality', { timeout: 10_000 })
-    await demoMark(page, 'Explore → Data Quality card opens the hub ✓', 2500)
-  })
-
-  test('FEED-TAG-PERSIST: a tag filter survives entering and leaving a story', async ({ page }) => {
-    // Batch-5 item 1: the user filters the feed by tag, enters a story,
-    // comes back, and expects the same filter to still be on. PR
-    // fontem-web #150 persists the active tag in localStorage and
-    // restores it on mount when no ?tag= is in the URL.
-    //
-    // Seed the data if no tags exist yet: create a story, tag it,
-    // publish it. Self-seeding keeps this test runnable on a fresh
-    // testing env where nothing is tagged yet.
-    await uiLogin(page)
-    const seedTag = `smoke-${RUN_ID.slice(-8)}`
-    const token = await freshAccessToken(page)
-    const seeded = await page.evaluate(async ({ tag, tok }) => {
-      // POST /data-stories accepts only title/abstract/parent_id — the
-      // visibility lives on the PUT update endpoint. So we create
-      // private, flip to public_open, then attach the tag.
-      // One retry on the "not now" statuses. The suite fires a lot of
-      // requests from a single address, so a seeding POST can land in a
-      // spent bucket through nobody's fault — and a seed that fails takes
-      // the whole test with it. Retried here rather than in the app,
-      // because the app must NOT retry a create: that makes two stories.
-      const post = async () => fetch('/capi/data-stories', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({
-          title: `Persist Tag Seed ${Date.now()}`,
-          abstract: 'Self-seeded story so FEED-TAG-PERSIST has something to filter.',
-        }),
-      })
-      let create = await post()
-      if ([408, 429, 502, 503, 504].includes(create.status)) {
-        await new Promise((r) => setTimeout(r, 800))
-        create = await post()
-      }
-      // Say WHY, rather than handing back a null the assertion cannot
-      // explain. FEED-TAG-PERSIST failed the gate as "seeded story id:
-      // Received null" — which could have been auth, a rate limit or a
-      // 500, and the test had thrown all three away.
-      if (!create.ok) {
-        return { error: `create -> HTTP ${create.status}: `
-          + (await create.text().catch(() => '')).slice(0, 200) }
-      }
-      const story = await create.json()
-      const id = story.id
-      await fetch(`/capi/data-stories/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({
-          title: story.title,
-          abstract: story.abstract,
-          visibility: 'public_open',
-        }),
-      })
-      await fetch(`/capi/data-stories/${id}/tags`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ tags: [tag] }),
-      })
-      return { id }
-    }, { tag: seedTag, tok: token })
-    expect(seeded?.id, `seeding failed: ${seeded?.error || 'no id returned'}`)
-      .toBeTruthy()
-    const seededId = seeded.id
-    await demoMark(page, `FEED-TAG-PERSIST — seeded "#${seedTag}" tag`)
-
-    // Navigate to the feed with no ?tag= query.
-    await page.goto('/')
-    await expect(page.locator('[data-testid="feed-tag-strip"]')).toBeVisible({ timeout: 10_000 })
-    // Click the chip for our seed tag.
-    await page.locator(`[data-testid="tag-chip-${seedTag}"]`).click()
-    await expect(page.locator('[data-testid="feed-active-filter"]')).toBeVisible({ timeout: 5_000 })
-    await demoMark(page, `Filtered by "${seedTag}"`, 1500)
-
-    // Confirm localStorage holds the tag (the persistence contract).
-    const stored = await page.evaluate(() => localStorage.getItem('gmr-stories-tag'))
-    expect(stored).toBe(seedTag)
-
-    // Open the seeded story card.
-    const card = page.locator(`[data-testid="feed-card-${seededId}"]`)
-    await expect(card).toBeVisible({ timeout: 5_000 })
-    await card.click()
-    await page.waitForURL(new RegExp(`/stories/${seededId}$`), { timeout: 10_000 })
-    await demoMark(page, 'Entered the seeded story', 1500)
-
-    // Go BACK to the feed via the global nav (Stories link), NOT the
-    // browser back button — that's the path that drops the URL query
-    // and was the original bug surface.
-    // nav-feed, not nav-stories: the mixed landing feed is what was
-    // filtered above. Stories moved to its own route (fontem-web #498),
-    // so clicking it would leave `/` and prove nothing about the filter
-    // surviving a round trip.
-    await page.locator('[data-testid="nav-feed"]').click()
-    await page.waitForURL(/\/(\?.*)?$/, { timeout: 10_000 })
-    // The persisted tag should be re-applied via router.replace, so
-    // the URL carries `?tag=<seedTag>` and the filter banner is back.
-    await expect(page).toHaveURL(new RegExp(`[?&]tag=${seedTag}(&|$)`), { timeout: 5_000 })
-    await expect(page.locator('[data-testid="feed-active-filter"]')).toBeVisible({ timeout: 5_000 })
-    await demoMark(page, `Filter restored on the way back ✓ (tag=${seedTag})`, 2500)
-
-    // Cleanup the seeded story so the env stays tidy.
-    await page.evaluate(async ({ id, tok }) => {
-      await fetch(`/capi/data-stories/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${tok}` },
-      })
-    }, { id: seededId, tok: token })
-  })
-
   test('DQ-FRESHNESS: data quality hub no longer shows "Source freshness unavailable: HTTP 404"', async ({ page }) => {
     // Batch-6 item 2: the hub used to call `/api/data-quality/source-freshness`
     // — a URL that never existed on the backend — and rendered a
@@ -324,101 +214,6 @@ test.describe.serial('Production Smoke Tests', () => {
     } else {
       await demoMark(page, 'Triple-store inventory renders ✓', 2500)
     }
-  })
-
-  test('SPARQL-EDITOR: /sparql shows an editable textarea + Run button that POSTs to /api/sparql', async ({ page }) => {
-    // The default editor query (GROUP BY ?g across every named graph)
-    // is genuinely slow on populated stores — 30-45 s on staging — so
-    // we need more than the suite-default 60 s test timeout to wait
-    // out the API's 60 s ceiling without truncating the test.
-    test.setTimeout(120_000)
-    // Batch-6 item 1: SparqlView used to be a doc-only page; the user
-    // wanted an actual editable surface they could query from. fontem-
-    // web #154 + fontem-api #189 add the editor + backend.
-    await page.goto('/sparql')
-    await demoMark(page, 'SPARQL-EDITOR — open /sparql')
-
-    const editor = page.locator('[data-testid="sparql-editor"]')
-    const runBtn = page.locator('[data-testid="sparql-run"]')
-    await expect(editor).toBeVisible({ timeout: 10_000 })
-    await expect(runBtn).toBeVisible()
-
-    const initialQuery = await editor.inputValue()
-    expect(initialQuery.toUpperCase()).toContain('SELECT')
-    await demoMark(page, 'Editor pre-populated with an inventory query ✓', 1500)
-
-    await expect(page.locator('[data-testid="sparql-endpoint-url"]'))
-      .toContainText('/api/sparql')
-
-    // Hit Run. Possible outcomes:
-    //  - 200 + results table (Virtuoso reachable on testing)
-    //  - 503 + error banner (Virtuoso unconfigured — testing default)
-    // Either is a valid pass; the contract is that after a click,
-    // one of {results, error} renders within 30s and the Run button
-    // re-enables. Critically — NOT an indefinite spinner or a hidden
-    // 500.
-    //
-    // Wait window: the default query the editor ships with is a
-    // GROUP BY `?g` count over every `data.fontem.eu/graph/*` named
-    // graph. On a populated store (staging/prod) Virtuoso comfortably
-    // takes 30-45 s to walk every graph; the API's own ceiling is
-    // 60 s before it surfaces a 504. 65 s here covers both
-    // outcomes — slow-but-valid 200 and the API timeout 504 — so the
-    // test passes on environments with real data without inviting
-    // indefinite hangs.
-    // Three outcomes, all legitimate: rows, an explicit "matched nothing",
-    // or a surfaced backend error. Waiting only for the first two is what
-    // hung this test for 65s when the seeded query returned an empty
-    // answer and the page rendered neither.
-    await runBtn.click()
-    await Promise.race([
-      page.locator('[data-testid="sparql-results"]').waitFor({ timeout: 65_000 }),
-      page.locator('[data-testid="sparql-empty"]').waitFor({ timeout: 65_000 }),
-      page.locator('[data-testid="sparql-error"]').waitFor({ timeout: 65_000 }),
-    ])
-    await expect(runBtn).toBeEnabled({ timeout: 5_000 })
-
-    const errorVisible = await page.locator('[data-testid="sparql-error"]').isVisible().catch(() => false)
-    if (errorVisible) {
-      const detail = await page.locator('[data-testid="sparql-error"]').innerText()
-      // Pin the message so a hidden 500 can't pass. Two legitimate
-      // shapes: the 503 detail names Virtuoso when it is unconfigured,
-      // and a 504 when the query outruns the 60s gateway timeout — the
-      // seeded "count triples per graph" query does exactly that against
-      // the shared store, which holds the full 1949-2026 CELLAR mirror
-      // (measured: 504 at 60.1s). Both mean "backend said no, and the UI
-      // surfaced it"; a bare 500 still fails.
-      // 429 is here now, and it means something specific: the editor
-      // retried three times with backoff (src/api/retry.js) and the
-      // address is STILL being limited. That is a statement about the
-      // environment's capacity, not about the editor — and this test's
-      // subject is whether the editor surfaces a backend refusal legibly.
-      // A bare 500 still fails, which is the point of pinning at all.
-      expect(detail).toMatch(/Virtuoso|timed out|timeout|SPARQL|HTTP 50[34]|429|Too Many/i)
-      await demoMark(page, `Backend error surfaced: ${detail.slice(0, 60)}…`, 2500)
-    } else if (await page.locator('[data-testid="sparql-empty"]').isVisible().catch(() => false)) {
-      // The store answered and matched nothing. A real result, and the
-      // editor says so rather than showing a blank panel.
-      await demoMark(page, 'Query ran — no rows ✓', 2000)
-    } else {
-      await expect(page.locator('[data-testid="sparql-results"] thead th').first()).toBeVisible()
-      await demoMark(page, 'Query results rendered ✓', 2500)
-    }
-  })
-
-  test('SPARQL-EXAMPLE-LOADER: clicking a "Use this query" button replaces the editor content', async ({ page }) => {
-    // Batch-6 item 1 (sub-contract): every example query carries a
-    // "Use this query →" button that drops the example into the
-    // editor for the user to edit / run.
-    await page.goto('/sparql')
-    const editor = page.locator('[data-testid="sparql-editor"]')
-    await expect(editor).toBeVisible({ timeout: 10_000 })
-    const before = await editor.inputValue()
-    await page.locator('[data-testid="sparql-example-load-1"]').click()
-    const after = await editor.inputValue()
-    expect(after).not.toBe(before)
-    expect(after.toLowerCase()).toContain('schema:name')
-    await demoMark(page, 'Example query loaded into editor ✓', 2000)
   })
 
   test('AUTH-01: Login page loads with form', async ({ page }) => {
@@ -528,53 +323,6 @@ test.describe.serial('Production Smoke Tests', () => {
   test('BROWSE-07: Contracts view renders', async ({ page }) => {
     await page.goto('/c/AAPL/contracts')
     await expect(page.locator('[data-testid="contracts-panel"]').first()).toBeVisible({ timeout: 20_000 })
-  })
-
-  test('PROC-CONTRACT-LINK: every contracts row links to our detail page (not straight to TED)', async ({ page }) => {
-    // Contract links now route through our in-app /contract/:noticeId
-    // detail page (which carries the integrity profile + an outward link
-    // to TED), instead of jumping straight to ted.europa.eu. Pin that the
-    // row links are in-app detail links and that no row links out to TED.
-    await page.goto('/')
-    const searchInput = page.locator('input[type="search"]').first()
-    await searchInput.fill('Siemens AG')
-    await expect(page.locator('.gmr-card').first()).toBeVisible({ timeout: 10_000 })
-    await page.locator('.gmr-card').first().click()
-    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 10_000 })
-
-    const procCat = page.locator('[data-testid="view-cat-procurement"]').first()
-    if (await procCat.isVisible().catch(() => false)) await procCat.click()
-    const contractsTab = page.locator('[data-testid="view-tab-contracts"]').first()
-    if (await contractsTab.isVisible().catch(() => false)) await contractsTab.click()
-    await expect(page.locator('[data-testid="contracts-panel"]').first())
-      .toBeVisible({ timeout: 20_000 })
-
-    // Rows only carry a title link when the contract has a ted_notice_id;
-    // most do not (data-backlog item 25, ~94% NULL) and fontem-web now
-    // renders those titles as plain text rather than linking them to
-    // `/contract/null`, which is a dead page. So the invariant is not
-    // "every row is a link" but "no row escapes to TED, and any link
-    // there is goes to our detail page".
-    // Retrying assertions, not count() snapshots: the panel becomes
-    // visible before its rows settle, and a snapshot taken in that window
-    // judged a half-rendered table. toHaveCount/toHaveAttribute poll.
-    const tedLinks = page.locator('[data-testid^="contract-ted-link-"]')
-    await expect(tedLinks, 'no row may escape to TED').toHaveCount(0, { timeout: 15_000 })
-    const tableLink = page.locator('[data-testid^="contract-title-link-"]').first()
-    const linkable = await tableLink.waitFor({ state: 'visible', timeout: 10_000 })
-      .then(() => true).catch(() => false)
-    if (linkable) {
-      await expect(tableLink).toHaveAttribute('href', /^\/contract\/(?!null).+/)
-    }
-    expect(await page.locator('a[href*="ted.europa.eu"]').count()).toBe(0)
-    // Every row is accounted for: linked when it has a notice id, plain
-    // text when it does not. The count that must hold is linked+unlinked
-    // == rows, which is what catches a row silently vanishing (all the
-    // unlinked rows used to share the Vue :key `null`).
-    const rowCount = await page.locator('[data-testid^="contract-row-"]').count()
-    const unlinked = await page.locator('[data-testid="contract-title-unlinked"]').count()
-    expect(rowCount).toBeGreaterThan(0)
-    expect(linkable + unlinked).toBe(rowCount)
   })
 
   test('PROC-CONTRACT-DETAIL: a contract opens our detail page, which links out to the right TED notice', async ({ page, context }) => {
@@ -987,27 +735,6 @@ test.describe.serial('Production Smoke Tests', () => {
     await demoMark(page, 'UUID never appears in the visible body text ✓', 2000)
   })
 
-  test('PROFILE-FIN-HIDDEN: financials tab is HIDDEN entirely on an authority profile', async ({ page }) => {
-    // Batch-5 item 2: the user reported greyed-out Financials + Analysis
-    // tabs on an authority profile are dead UI. PR fontem-web #151
-    // changes the gate from "grey out" to "drop the whole group" when
-    // TickerFinancials emits company-resolved with kind:'authority'.
-    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
-    await page.goto(`/c/${AUTH}/profile`)
-    await demoMark(page, 'PROFILE-FIN-HIDDEN — open a known authority profile')
-    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 15_000 })
-
-    // Give the resolver up to 15s to identify the entity as an authority
-    // and re-emit the view list. Once it does, view-cat-financials is
-    // gone from the strip entirely (not greyed, not aria-disabled).
-    await expect(page.locator('[data-testid="view-cat-financials"]'))
-      .toHaveCount(0, { timeout: 15_000 })
-    await demoMark(page, 'Financials tab is gone (not greyed) ✓', 2000)
-    // Sanity: the other groups are still there.
-    await expect(page.locator('[data-testid="view-cat-overview"]')).toBeVisible()
-    await expect(page.locator('[data-testid="view-cat-procurement"]')).toBeVisible()
-  })
-
   test('PROFILE-AUTHORITY-NAME: authority profile header shows the name, never the UUID', async ({ page }) => {
     // Batch-5 item 3: /api/companies/<UUID> returns 200 with
     // company_name: null for an authority UUID (it's a stub, not 404).
@@ -1054,24 +781,6 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(headers.some((h) => h.startsWith('Contractor'))).toBe(true)
     expect(headers.some((h) => h.startsWith('Authority'))).toBe(false)
     await demoMark(page, 'Counterparty column reads "Contractor" ✓', 2500)
-  })
-
-  test('PROFILE-ANALYSIS-GONE: the Analysis tab is removed from the profile UI', async ({ page }) => {
-    // Regression for the chore: the Long-Term Value sub-view was
-    // removed from the user-clickable strip. /api/:ticker/gmr_data
-    // is still alive for embeds, and direct navigation to
-    // /c/<ticker>/gmr-long still mounts the panel — only the tab
-    // is gone from the UI.
-    await page.goto('/c/AAPL/profile')
-    await demoMark(page, 'PROFILE-ANALYSIS-GONE — open /c/AAPL/profile')
-    await expect(page.locator('[data-testid="view-selector"]')).toBeVisible({ timeout: 15_000 })
-    await expect(page.locator('[data-testid="view-cat-analysis"]')).toHaveCount(0)
-    await demoMark(page, 'view-cat-analysis is gone from the tab strip ✓', 2000)
-    // Sanity: other categories are still there.
-    await expect(page.locator('[data-testid="view-cat-overview"]')).toBeVisible()
-    await expect(page.locator('[data-testid="view-cat-financials"]')).toBeVisible()
-    await expect(page.locator('[data-testid="view-cat-procurement"]')).toBeVisible()
-    await demoMark(page, 'Overview / Financials / Procurement still wired ✓', 2000)
   })
 
   // ── Report Lifecycle (all via UI) ──────────────────────────────
@@ -1147,39 +856,6 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="report-section-0"]')).toContainText('Siemens')
   })
 
-  test('STORY-13: Editor toolbar is visible', async ({ page }) => {
-    if (!storyId) test.skip()
-    await uiLogin(page)
-    await page.goto(`/stories/${storyId}/edit`)
-    // Both `editor-toolbar` and `.tiptap-editor .tiptap` only render once the
-    // TipTap editor instance finishes initializing (the template wraps them
-    // in `v-if="editor"`). Cold-start init can take well over 10s under
-    // cluster CPU pressure — bump the timeouts to tolerate it. This test
-    // is a visibility check, not a perf check.
-    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
-    await expect(page.locator('.tiptap-editor .tiptap')).toBeVisible({ timeout: 10_000 })
-  })
-
-  test('STORY-TOOLBAR-UNIFIED: editor renders a single unified toolbar', async ({ page }) => {
-    // Pre-batch-3 the editor showed two adjacent bars (BubbleToolbar +
-    // FloatingToolbar) with duplicated H1/H2 buttons. PR #144 merged
-    // them into StoryEditorToolbar. Pin: the new testid is there, the
-    // two old ones are gone, the heading buttons appear exactly once.
-    if (!storyId) test.skip()
-    await uiLogin(page)
-    await page.goto(`/stories/${storyId}/edit`)
-    await demoMark(page, 'STORY-TOOLBAR-UNIFIED — wait for the editor to mount')
-    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
-    await demoMark(page, 'unified editor-toolbar visible; old bars must NOT be present', 2000)
-    expect(await page.locator('[data-testid="bubble-toolbar"]').count()).toBe(0)
-    expect(await page.locator('[data-testid="floating-toolbar"]').count()).toBe(0)
-    // H1 / H2 / H3 each render exactly once across the unified bar.
-    expect(await page.locator('[data-testid="tb-h1"]').count()).toBe(1)
-    expect(await page.locator('[data-testid="tb-h2"]').count()).toBe(1)
-    expect(await page.locator('[data-testid="tb-h3"]').count()).toBe(1)
-    await demoMark(page, 'H1/H2/H3 each present exactly once ✓', 2000)
-  })
-
   test('STORY-CHAPTER-RAIL: TOC component is wired into the editor layout', async ({ page }) => {
     // ChapterRail was read-only on the report view; PR #146 mounts it
     // in the editor too. End-to-end pin: walk `.editor-layout` and
@@ -1219,38 +895,6 @@ test.describe.serial('Production Smoke Tests', () => {
       `expected ChapterRail placeholder comment inside .editor-layout; saw children: ${JSON.stringify(layout.childTags)}`,
     ).toBe(true)
     await demoMark(page, 'ChapterRail wired into .editor-layout ✓', 2500)
-  })
-
-  test('STORY-TABLE-CONTROLS: clicking a table cell shows + / 🗑 column widgets', async ({ page }) => {
-    // PR #147 added TableControlsOverlay. Insert a table via the
-    // unified toolbar's tb-table button, click into a cell, then
-    // confirm the overlay + at least one column widget render.
-    if (!storyId) test.skip()
-    await uiLogin(page)
-    await page.goto(`/stories/${storyId}/edit`)
-    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
-    await demoMark(page, 'STORY-TABLE-CONTROLS — insert a table via the toolbar')
-    const body = page.locator('.tiptap-editor .tiptap')
-    await body.click()
-    await page.keyboard.press('End')
-    await page.keyboard.press('Enter')
-    await page.locator('[data-testid="tb-table"]').click()
-    // Click the first cell so the cursor lands inside the table.
-    const firstCell = page.locator('.tiptap-editor .tiptap table td').first()
-    await firstCell.click()
-    await demoMark(page, 'Cursor inside the new 3×3 table', 1500)
-    // The `.table-overlay` wrapper itself sits at `height: 0` (it's
-    // a positioning anchor for absolutely-positioned column widgets),
-    // so Playwright's `toBeVisible` treats it as hidden. Assert on
-    // the widgets themselves instead — they have real bounds.
-    await expect(page.locator('[data-testid="table-overlay"]'))
-      .toHaveCount(1, { timeout: 5_000 })
-    // 3 cells → 4 column widgets (boundaries 0..3).
-    const widgets = page.locator('[data-testid^="table-col-widget-"]')
-    await widgets.first().waitFor({ state: 'visible', timeout: 5_000 })
-    expect(await widgets.count()).toBeGreaterThanOrEqual(4)
-    await expect(page.locator('[data-testid="table-add-row"]')).toBeVisible()
-    await demoMark(page, 'Column widgets + "+ Row" affordance rendered ✓', 2000)
   })
 
   test('STORY-IMAGE-UPLOAD: uploaded image is served via a presigned URL', async ({ page }) => {
@@ -1366,70 +1010,6 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="toast-success"]'))
       .toBeVisible({ timeout: 10_000 })
     await demoMark(page, 'Save success toast appeared ✓', 2500)
-  })
-
-  test('STORY-TABLE-ROW-TRASH: per-row trash buttons render to the left of each row', async ({ page }) => {
-    // PR #149 adds a 🗑 button to the left of each <tr> in the
-    // active-table overlay. Insert a table, click into a cell, then
-    // confirm one row-trash button per row is rendered.
-    if (!storyId) test.skip()
-    await uiLogin(page)
-    await page.goto(`/stories/${storyId}/edit`)
-    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
-    await demoMark(page, 'STORY-TABLE-ROW-TRASH — insert a table')
-    const body = page.locator('.tiptap-editor .tiptap')
-    await body.click()
-    await page.keyboard.press('End')
-    await page.keyboard.press('Enter')
-    await page.locator('[data-testid="tb-table"]').click()
-    await page.locator('.tiptap-editor .tiptap table td').first().click()
-    await demoMark(page, 'Cursor inside the new 3×3 table', 1500)
-    // Default TipTap table is 3 rows (header + 2 body) × 3 cols.
-    const rowTrash = page.locator('[data-testid^="table-row-del-"]')
-    await rowTrash.first().waitFor({ state: 'visible', timeout: 5_000 })
-    expect(await rowTrash.count()).toBeGreaterThanOrEqual(3)
-    await demoMark(page, `${await rowTrash.count()} row-trash buttons rendered ✓`, 2500)
-  })
-
-  test('STORY-TABLE-LAST-DELETES-TABLE: deleting the last column drops the whole table', async ({ page }) => {
-    // PR #149 changes the column-trash behaviour so that deleting the
-    // *last* remaining column calls editor.deleteTable() instead of
-    // editor.deleteColumn() — the TipTap schema doesn't allow a
-    // 0-column table. Insert a table, delete columns until one is left,
-    // then click the last column-trash and confirm the table is gone.
-    if (!storyId) test.skip()
-    await uiLogin(page)
-    await page.goto(`/stories/${storyId}/edit`)
-    await expect(page.locator('[data-testid="editor-toolbar"]')).toBeVisible({ timeout: 30_000 })
-    await demoMark(page, 'STORY-TABLE-LAST-DELETES-TABLE — insert a table')
-    const body = page.locator('.tiptap-editor .tiptap')
-    await body.click()
-    await page.keyboard.press('End')
-    await page.keyboard.press('Enter')
-    await page.locator('[data-testid="tb-table"]').click()
-    await page.locator('.tiptap-editor .tiptap table td').first().click()
-    const table = page.locator('.tiptap-editor .tiptap table')
-    await expect(table).toBeVisible()
-
-    // Boundary trash widgets exist for i=1..N (no trash at i=0).
-    // Strip columns from the right until one remains by repeatedly
-    // clicking the highest-index trash currently rendered.
-    for (let safety = 0; safety < 6; safety++) {
-      const widgets = await page.locator('[data-testid^="table-col-widget-"]').count()
-      if (widgets <= 2) break  // 1 column → 2 boundaries (left + right)
-      // Click the rightmost trash (boundary widgets-1, i.e. the gap at
-      // the right edge — deletes the column to its left).
-      await page.locator(`[data-testid="table-col-del-${widgets - 1}"]`).click()
-      // Re-anchor selection inside the surviving table to keep the
-      // overlay visible.
-      await page.locator('.tiptap-editor .tiptap table td').first().click()
-    }
-    await demoMark(page, 'Down to 1 column — click the last trash', 1500)
-    // Exactly one trash button should remain (at boundary 1) — click
-    // it. The whole table should vanish.
-    await page.locator('[data-testid="table-col-del-1"]').click()
-    await expect(table).toHaveCount(0, { timeout: 5_000 })
-    await demoMark(page, 'Table deleted when last column was removed ✓', 2500)
   })
 
   test('STORY-MENTION-1: @-typing inserts an entity chip + chip click opens the side panel', async ({ page }) => {
@@ -1568,85 +1148,6 @@ test.describe.serial('Production Smoke Tests', () => {
 
 
 
-  test('STORY-FLOWERS-3: anonymous visitor sees the button rendered but disabled with sign-in tooltip', async ({ page, browser }) => {
-    // Seed a public_open story as the authed user, then load it in a
-    // fresh incognito context with no auth state — the button must
-    // render disabled (not vanish) so anon visitors can see the
-    // social signal and a sign-in hint.
-    await uiLogin(page)
-    const token = await freshAccessToken(page)
-    if (!token) test.skip()
-    const anonStoryId = await page.evaluate(async ({ runId, tok }) => {
-      const r = await fetch('/capi/data-stories', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ title: `Anon Flower Story ${runId}`, abstract: 'Story under anon flower smoke test.' }),
-      })
-      if (!r.ok) throw new Error(`create story failed: ${r.status} ${await r.text()}`)
-      const { id } = await r.json()
-      const v = await fetch(`/capi/data-stories/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ title: `Anon Flower Story ${runId}`, abstract: 'Story under anon flower smoke test.', visibility: 'public_open' }),
-      })
-      if (!v.ok) throw new Error(`make-public failed: ${v.status} ${await v.text()}`)
-      return id
-    }, { runId: RUN_ID, tok: token })
-
-    let anonCtx
-    try {
-      // Explicit empty storageState + ignoreHTTPSErrors: browser.newContext()
-      // would otherwise inherit the project storageState (the seeded
-      // auth.json), making this "anonymous" context actually signed in —
-      // and without ignoreHTTPSErrors it can't load the internal-CA host.
-      anonCtx = await browser.newContext({
-        storageState: { cookies: [], origins: [] },
-        ignoreHTTPSErrors: true,
-      })
-      const anonPage = await anonCtx.newPage()
-      // When this page renders empty the button assertion says only
-      // "element(s) not found" — run 28166 failed exactly so, with the
-      // actual cause (a 4xx on the story fetch?) invisible. Collect the
-      // page's failed API responses and put them in the failure message.
-      const anonApiFailures = []
-      anonPage.on('response', (resp) => {
-        if (resp.url().includes('/capi/') && resp.status() >= 400) {
-          const via = resp.headers()['x-ratelimited-by'] || ''
-          anonApiFailures.push(
-            `${resp.status()} ${resp.url()}${via ? ` (via ${via})` : ''}`,
-          )
-        }
-      })
-      await anonPage.goto(`/stories/${anonStoryId}?cb=${Date.now()}`)
-      const btn = anonPage.locator('[data-testid="flower-button"]')
-      try {
-        await expect(btn).toBeVisible({ timeout: 15_000 })
-      } catch (e) {
-        // Evaluated AFTER the wait, so it names calls that failed while
-        // we were waiting — a message built at expect() time would not.
-        throw new Error(
-          `flower button missing; failed API calls: ` +
-          `${anonApiFailures.join(', ') || 'none captured'}\n${e.message}`,
-        )
-      }
-      await expect(btn).toBeDisabled({ timeout: 5_000 })
-      const title = await btn.getAttribute('title')
-      // Locale-agnostic check: the sign-in tooltip exists and isn't
-      // the give-a-flower tooltip — assert it has SOME non-empty text
-      // and isn't the cap message. The disabled state itself is the
-      // load-bearing assertion.
-      expect(title && title.length > 0).toBe(true)
-    } finally {
-      if (anonCtx) await anonCtx.close()
-      await page.evaluate(async ({ id, tok }) => {
-        await fetch(`/capi/data-stories/${id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${tok}` },
-        })
-      }, { id: anonStoryId, tok: token })
-    }
-  })
-
   test('STORY-14: My Stories page shows the story', async ({ page }) => {
     await uiLogin(page)
     // /reports redirects to /my-stories since the nav restructure
@@ -1693,16 +1194,6 @@ test.describe.serial('Production Smoke Tests', () => {
       page.locator('[data-testid="issue-create-error"]').waitFor({ state: 'visible', timeout: 10_000 }),
     ]).catch(() => {})
     // Either outcome is acceptable — the flow completed without hanging
-  })
-
-  test('ISSUE-16: Issues list page loads with tabs', async ({ page }) => {
-    await uiLogin(page)
-    await page.goto('/issues')
-    await expect(page.locator('[data-testid="issues-view"]')).toBeVisible({ timeout: 10_000 })
-    // Tab navigation should be present
-    await expect(page.locator('[data-testid="issues-tabs"]')).toBeVisible()
-    await expect(page.locator('[data-testid="issues-tab-all"]')).toBeVisible()
-    await expect(page.locator('[data-testid="issues-tab-open"]')).toBeVisible()
   })
 
   // ── Pages ──────────────────────────────────────────────────────
@@ -1797,50 +1288,6 @@ test.describe.serial('Production Smoke Tests', () => {
       optCount,
       'Atlas picker has no dataset options — fontem-stats catalog likely empty',
     ).toBeGreaterThan(1)
-  })
-
-  test('ATLAS-20: picking a dataset triggers a backend series fetch', async ({ page, request }) => {
-    test.skip(!(await atlasConfigured(request)), 'atlas not configured in this env')
-    // Locks the contract that the UI actually talks to /api/atlas/*.
-    // If the URL prefix drifts (we've already had one /api/stats/* →
-    // /api/atlas/* rename) the smoke fails here before promote.
-    // Skip when the stats backend isn't provisioned in this env
-    // (staging legitimately runs without it — see ATLAS-19).
-    const probe = await page.request.get('/api/atlas/datasets')
-    if (!probe.ok()) {
-      const body = await probe.text().catch(() => '')
-      if (body.includes('stats store unavailable') || body.includes('STATS_DATABASE_URL')) {
-        test.skip(true, 'fontem-stats not provisioned in this env')
-      }
-    }
-    let seriesUrl = null
-    page.on('response', (resp) => {
-      if (resp.url().includes('/api/atlas/series')) seriesUrl = resp.url()
-    })
-    await page.goto('/atlas')
-    const picker = page.locator('[data-testid="atlas-dataset"]')
-    await expect(picker).toBeVisible({ timeout: 15_000 })
-
-    // Pick a real dataset — first non-placeholder option.
-    const firstReal = await picker.locator('option').nth(1).getAttribute('value')
-    if (!firstReal) test.skip()
-    await picker.selectOption(firstReal)
-
-    // Backend hit may be a few hundred ms; the URL should carry the
-    // dataset code we picked AND a nuts_level (the choropleth query).
-    // 30s budget rather than 15s — the first dataset alphabetically
-    // is a migration table that legitimately spends ~15-25s on the
-    // initial query against a cold cache (the per-dataset materialised
-    // views aren't all hot in staging). Bumped after the smoke suite
-    // started flaking on it intermittently — better to wait than to
-    // skip a dataset because it picked the slow one to probe.
-    await page.waitForResponse(
-      (r) => r.url().includes('/api/atlas/series') && r.status() === 200,
-      { timeout: 30_000 },
-    )
-    expect(seriesUrl, 'no /api/atlas/series request was issued').toBeTruthy()
-    expect(seriesUrl).toContain(`dataset=${firstReal}`)
-    expect(seriesUrl).toContain('nuts_level=')
   })
 
   test('ATLAS-21: every dataset returns 2xx from /atlas/series', async ({ request }) => {
@@ -2238,59 +1685,6 @@ test.describe.serial('Production Smoke Tests', () => {
     ).toMatch(/AAPL|Apple/i)
   })
 
-  test('ASSIST-20: Assistant proposes edit, user applies it, content lands in editor', async ({ page }) => {
-    test.setTimeout(300_000)
-    if (!storyId) test.skip()
-    test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
-    await uiLogin(page)
-    await page.goto(`/stories/${storyId}/edit`)
-    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
-
-    // Open assistant panel
-    await page.click('[data-testid="assist-toggle"]')
-    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-
-    // Distinctive marker so we can prove the inserted content actually
-    // landed in the editor (not just that the "Applied" badge flipped —
-    // that was the gap that let the apply-flow bug ship).
-    const marker = `MARKER-ASSIST20-${RUN_ID.slice(0, 8)}`
-    // Wording matters at 4B. The previous phrasing let the model satisfy
-    // itself by DESCRIBING the edit — it replied "the string has been added
-    // to the report as requested" without calling anything. Naming the tool
-    // as the only acceptable action, and forbidding the narration explicitly,
-    // removes the interpretation it kept choosing. This is a clearer
-    // instruction, not a weaker assertion: the test still requires a real
-    // tool call, a real Apply, and the marker landing in the editor.
-    //
-    // read_document first because replace_body requires it: the
-    // blind-rewrite guard in tool_runtime refuses a whole-body rewrite
-    // from a model that has not read what it is replacing. The prompt
-    // has to ask for the pair, or the gate tests the guard instead of
-    // the editor.
-    await sendAssistMessage(page,
-      `Call the read_document tool, then call the replace_body tool with ` +
-      `content set to a single short paragraph containing the exact string ` +
-      `${marker}. Do not answer in prose. Do not say the edit is done. ` +
-      'The only acceptable action is the tool calls themselves.')
-
-    // The card renders the moment the proposal event arrives (mid-stream),
-    // but wait for the turn to settle anyway: the window used to be
-    // anchored to the first chunk, and at 15 tok/s the prose tail alone
-    // outlived it — that anchor was this test's entire flake.
-    await expect(page.locator('[data-testid="assist-status"]')).toBeHidden({ timeout: 200_000 })
-    await expect(page.locator('[data-testid="assist-proposals"]').last()).toBeVisible({ timeout: 30_000 })
-    await expect(page.locator('[data-testid="proposal-action"]').last()).toBeVisible()
-
-    // Apply the proposal.
-    await page.locator('[data-testid="proposal-apply"]').last().click()
-    await expect(page.locator('[data-testid="proposal-applied"]').last()).toBeVisible({ timeout: 5_000 })
-
-    // The apply-flow regression: the editor used to get blown away on apply,
-    // so the badge would say "Applied" while the editor was empty. We now
-    // check the editor body actually contains the inserted marker.
-    await expect(page.locator('.tiptap-editor .tiptap')).toContainText(marker, { timeout: 10_000 })
-  })
-
   // ASSIST-MCP-1 was removed here on 2026-08-10, along with the
   // status-capturing helper that existed only to serve it.
   //
@@ -2310,83 +1704,6 @@ test.describe.serial('Production Smoke Tests', () => {
   // while the model keeps talking plausibly is now caught later than it
   // was. Worth restoring if non-prod ever runs a model that holds it.
 
-  test('ASSIST-BYPASS: accept-all toggle auto-applies proposed edits', async ({ page }) => {
-    // Regression for the prod ask: the assistant had no equivalent of
-    // Claude Code's "bypass permissions" mode — every propose_edit
-    // came back with an Apply/Dismiss prompt and broke flow on multi-
-    // step edit sessions. Fix lives in AssistPanel.vue (bypass toggle
-    // persisted in localStorage, auto-fires applyProposal on each
-    // proposal as soon as the stream completes, marks the proposal
-    // autoApplied so the UI shows "Applied automatically" instead of
-    // the Apply/Dismiss buttons).
-    test.setTimeout(300_000)
-    if (!storyId) test.skip()
-    test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
-    await uiLogin(page)
-    await page.goto(`/stories/${storyId}/edit`)
-    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
-
-    await page.click('[data-testid="assist-toggle"]')
-    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-
-    const toggle = page.locator('[data-testid="assist-bypass-toggle"]')
-    await expect(toggle).toBeVisible()
-    // Default: OFF
-    await expect(toggle).not.toBeChecked()
-
-    // Flip on, then verify persistence to localStorage. This is the
-    // contract the unit test pins; checking it here ensures the same
-    // key/value reaches the deployed bundle (cache-bust / minifier /
-    // CSP didn't break the watcher).
-    await toggle.check()
-    await expect(toggle).toBeChecked()
-    const persisted = await page.evaluate(
-      () => localStorage.getItem('fontem-assist-bypass-permissions'),
-    )
-    expect(persisted).toBe('1')
-
-    // Ask for a concrete title change. The assistant should respond
-    // with a propose_edit tool call; with bypass on, the panel applies
-    // it automatically — no Apply button is rendered, and the
-    // "Applied automatically" badge shows instead.
-    //
-    // Name the actual tool — the assistant refuses anything that asks
-    // for a tool it doesn't expose, and pushes back instead of
-    // hallucinating the call, which is the correct behaviour we just
-    // can't smoke-test for here.
-    //
-    // That tool is `set_title`. This comment used to say the opposite,
-    // word for word: that set_title was "a stale name that survived a
-    // mcp-server rename" and propose_edit was the real one. The surface
-    // swung back — propose_edit was retired in favour of one verb per
-    // job — and the prompt sat naming a withdrawn tool for as long as
-    // the lint that should have caught it was mirroring a deleted file.
-    // Check tests/prompt-lint.test.js against the server before
-    // trusting either name, including this one.
-    const bypassTitle = `Bypass smoke ${RUN_ID.slice(0, 8)}`
-    await sendAssistMessage(page,
-      `Use the set_title tool to set the report ` +
-      `title to "${bypassTitle}". Reply with just "ok" after calling the tool.`)
-
-    // The Applied-automatically badge proves the bypass path ran.
-    await expect(
-      page.locator('[data-testid="proposal-applied"]').last(),
-    ).toContainText(/Applied automatically/i, { timeout: 30_000 })
-    // And the manual Apply button must NOT exist for that proposal,
-    // i.e. the user was never prompted.
-    const proposalApplyButtons = page.locator('[data-testid="proposal-apply"]')
-    expect(await proposalApplyButtons.count()).toBe(0)
-
-    // Tidy up: turn the toggle back off so the rest of the suite
-    // and any subsequent runs against this report start in the
-    // non-bypass default state.
-    await toggle.uncheck()
-    await expect(toggle).not.toBeChecked()
-    const cleared = await page.evaluate(
-      () => localStorage.getItem('fontem-assist-bypass-permissions'),
-    )
-    expect(cleared).toBeNull()
-  })
     // ASSIST-21 is the outlier and owns its deadline rather than
     // dragging every assistant test up with it. Measured against
     // staging: 177s and 246s for this exact turn. It is not slow
@@ -2482,79 +1799,6 @@ test.describe.serial('Production Smoke Tests', () => {
     // Has to be more than the "not found" stub the broken path used to
     // emit. 80 chars filters out generic refusals, doesn't pin phrasing.
     expect(responseText.length).toBeGreaterThan(80)
-  })
-
-  test('ASSIST-NAV: navigation asks first, and accept-all does not answer for you', async ({ page }) => {
-    // Two attempts at the 200s default plus the click.
-    test.setTimeout(480_000)
-    test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
-    await uiLogin(page)
-
-    // Start somewhere that is not the destination.
-    // This test gets its own story, and therefore its own conversation.
-    //
-    // The panel keys turns outside an article to one shared "global"
-    // thread, which by this point in the suite is dozens of messages deep —
-    // all re-sent as context to a 1.7B, which is how a single short tool
-    // call blew a 120s deadline (28 messages, run #970).
-    //
-    // The first attempt at fixing that deleted every conversation the user
-    // had. It worked here and broke ASSIST-23 twice in a row: that test
-    // leans on the tool-use precedent accumulated in its own report thread,
-    // and wiping the lot took it away. A fresh story is short by
-    // construction and touches nobody else's history.
-    await page.goto('/my-stories')
-    await page.click('[data-testid="create-btn"]')
-    await page.click('[data-testid="new-story-btn"]')
-    await page.waitForURL(/\/stories\/.*\/edit/, { timeout: 15_000 })
-    const navStoryId = page.url().match(/\/stories\/([^/]+)\/edit/)?.[1]
-    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
-
-    await page.click('[data-testid="assist-toggle"]')
-    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-
-    // Accept-all ON deliberately. It governs proposed edits to an article
-    // the user is looking at; it is not consent to be moved to another
-    // page, and this test exists to keep those two separate.
-    const bypass = page.locator('[data-testid="assist-bypass-toggle"]')
-    if (!(await bypass.isChecked())) await bypass.check()
-
-    // Getting the model to CALL the tool is the precondition, not the thing
-    // under test — and the non-prod agent is a 1.7B, which ignores the
-    // instruction often enough to fail a single-shot ask (it did on run
-    // #962, having passed on #958). Asking again is honest here: what this
-    // test exists to prove is that a navigate call reaches the panel as a
-    // question, not that a small model is obedient. Three attempts, then a
-    // real failure.
-    const ask = page.locator('[data-testid="assist-nav"]').last()
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      await sendAssistMessage(page,
-        'Call the navigate tool with path "/map" to take me to the Atlas. ' +
-        'Use the tool — do not just describe it.')
-      if (await ask.isVisible().catch(() => false)) break
-      expect(attempt, 'the assistant never called navigate in 2 attempts')
-        .toBeLessThan(2)
-    }
-
-    // Two halves of the same bug. The panel must ASK — and until it is
-    // answered the user must still be where they were. Before the fix the
-    // production executor dropped the navigate event entirely, so the
-    // assistant said it had navigated and nothing happened; the naive fix
-    // would then move people mid-task without asking.
-    await expect(ask).toBeVisible({ timeout: 30_000 })
-    expect(page.url()).not.toContain('/map')
-
-    await page.locator('[data-testid="assist-nav-go"]').last().click()
-    await page.waitForURL(/\/map/, { timeout: 15_000 })
-    expect(page.url()).toContain('/map')
-
-    // Don't accumulate a story per run.
-    if (navStoryId) {
-      const token = await freshAccessToken(page)
-      await page.request.delete(`/capi/stories/${navStoryId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {})
-    }
   })
 
   // ASSIST-23 runs on the scripted model, not the 1.7B. Every other
@@ -2667,96 +1911,6 @@ test.describe.serial('Production Smoke Tests', () => {
       const readRow = messages.slice(turnStart).find(
         (m) => m.role === 'tool' && m.content === 'mcp__gmr__read_document')
       expect(readRow.extras?.result, 'the read result was not stored').toBeTruthy()
-    } finally {
-      await pick('qwen3-1.7b')
-    }
-  })
-
-  test('ASSIST-28: the assistant reads the article on screen, not the selected chat', async ({ page }) => {
-    // The production failure this gate exists for (2026-08-31): the author
-    // was editing a story with an OLDER chat selected in the switcher, and
-    // every read_document came back "Report <uuid> not found" — the uuid of
-    // a story deleted months earlier, because the server took the document
-    // id from the conversation key. The article was on screen the whole
-    // time.
-    //
-    // Nothing below the request body could see it: the tools worked, the
-    // reports worked, the report the tools were pointed at was simply the
-    // wrong one. So the gate has to be a browser driving the real switcher
-    // — a unit test that hand-builds the request cannot get this wrong in
-    // the way the product did.
-    //
-    // Scripted model, because the assertion is about which document a tool
-    // read and not about a model's judgement. The 1.7B choosing to answer
-    // without reading would make this pass while proving nothing.
-    test.setTimeout(300_000)
-    if (!storyId) test.skip()
-    await uiLogin(page)
-
-    const token = await freshAccessToken(page)
-    const pick = async (id) => page.request.put('/capi/assist/models', {
-      headers: { Authorization: `Bearer ${token}` },
-      data: { model_id: id },
-    })
-    const chose = await pick('mock-e2e')
-    test.skip(chose.status() === 422,
-      'scripted model not enabled here (assistMockModel unset)')
-    expect(chose.ok(), `could not select the scripted model: ${chose.status()}`).toBeTruthy()
-
-    try {
-      await page.goto(`/stories/${storyId}/edit`)
-      await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
-      await page.click('[data-testid="assist-toggle"]')
-      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-
-      // Move off the report's own chat, the way the switcher lets anyone
-      // do in one click. The new chat is about nothing; the editor behind
-      // it still holds the article.
-      const [created] = await Promise.all([
-        page.waitForResponse((r) => r.url().includes('/capi/assist/conversations')
-          && r.request().method() === 'POST', { timeout: 30_000 }),
-        page.locator('[data-testid="assist-new-conversation"]').click(),
-      ])
-      const chatKey = (await created.json()).conversation_key
-      expect(chatKey, 'the new chat must not be the report chat')
-        .toMatch(/^chat:/)
-
-      // The turn carries both facts, and they disagree: this chat, that
-      // article. Asserting on the request localises a regression to the
-      // client instead of leaving it to look like a tool failure.
-      const [streamReq] = await Promise.all([
-        page.waitForRequest((r) => r.url().includes('/assist/chat/stream'), { timeout: 30_000 }),
-        sendAssistMessage(page, 'E2E-SCENARIO: edit rewrite this draft.'),
-      ])
-      const sent = JSON.parse(streamReq.postData() || '{}')
-      expect(sent.conversation_key, 'the turn should be in the chat we switched to')
-        .toBe(chatKey)
-      expect(sent.report_id, 'the turn must name the article on screen')
-        .toBe(storyId)
-
-      await expect(page.locator('[data-testid="assist-status"]')).toBeHidden({ timeout: 200_000 })
-      // The scripted model says this out loud when the read fails, which is
-      // what the production session saw.
-      await expect(page.locator('.assist-msg--assistant').last())
-        .not.toContainText('MOCK-FAIL')
-
-      // The proof: what read_document actually returned. It names the
-      // report it read, so the assertion is the identity of the document
-      // rather than the absence of an error.
-      const conv = await page.request.get(
-        `/capi/assist/conversations/${encodeURIComponent(chatKey)}`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      )
-      expect(conv.ok(), `could not read the chat back: ${conv.status()}`).toBeTruthy()
-      const messages = (await conv.json()).messages || []
-      const readRow = messages.filter(
-        (m) => m.role === 'tool' && m.content === 'mcp__gmr__read_document').pop()
-      expect(readRow, 'read_document is missing from the record — the document '
-        + 'tools were not offered for this turn').toBeTruthy()
-      const read = JSON.parse(readRow.extras?.result || '{}')
-      expect(read.error, `read_document errored: ${read.error}`).toBeFalsy()
-      expect(read.report_id, 'the assistant read a different article than the one open')
-        .toBe(storyId)
     } finally {
       await pick('qwen3-1.7b')
     }
@@ -2896,219 +2050,6 @@ test.describe.serial('Production Smoke Tests', () => {
     }
   })
 
-  test('ASSIST-ANON: a signed-out visitor gets the assistant, and only the small one', async ({ browser, request }) => {
-    // Deliberately does not depend on the model choosing to call navigate.
-    // What is being tested is the contract the server offers a visitor with
-    // no session, and that contract is observable without a single token:
-    // the stream opens, and everything that would spend an account stays
-    // shut. Asserting on a 1.7B's tool choice would make this test measure
-    // the model instead.
-    test.setTimeout(120_000)
-
-    // The `request` fixture is already anonymous for our purposes: the
-    // suite's storageState carries a session, but the token lives in
-    // localStorage and APIRequestContext replays only cookies. The `page`
-    // fixture is NOT — it loads that localStorage and is signed in, which
-    // is why the UI half below builds its own context instead. An earlier
-    // version of this test called clearCookies() and believed it; the
-    // model picker showing up against testing is what gave it away.
-    const stream = await request.post('/capi/assist/chat/stream', {
-      data: {
-        message: 'what is on this site?',
-        conversation_key: `anon-smoke-${RUN_ID.slice(0, 8)}`,
-        context_block: '',
-      },
-      timeout: 60_000,
-    })
-    // 429 is not a failure here, it is the other half of the same feature:
-    // the allowance is 20/hour per IP, and CI shares an address, so a
-    // re-run within the hour legitimately meets the limit. Both answers
-    // prove the anonymous path is wired; only a 401 or a 5xx would not.
-    // Everything below still runs — the length cap is checked BEFORE the
-    // rate limit (pinned by a unit test in fontem-community-api), and the
-    // UI half spends no allowance at all.
-    expect([200, 429],
-      'a signed-out visitor must be served, or told they have had their turn')
-      .toContain(stream.status())
-    if (stream.status() === 429) {
-      console.log('ASSIST-ANON: anonymous allowance already spent for this '
-        + 'address this hour; the stream body check is the one thing skipped.')
-    } else {
-      expect(stream.headers()['content-type']).toContain('text/event-stream')
-    }
-
-    // The rest of the assistant still needs an account. If any of these
-    // start answering, an unauthenticated caller has been handed either
-    // someone's history or a way to spend their key.
-    for (const path of ['/capi/assist/usage', '/capi/assist/models',
-                        '/capi/assist/credentials']) {
-      const resp = await request.get(path, { timeout: 15_000 })
-      expect(resp.status(), `${path} must stay private`).toBe(401)
-    }
-
-    // An over-long message is refused, and refused before the model is
-    // asked anything. 1000 is ANONYMOUS_MAX_PROMPT_CHARS in
-    // fontem-community-api; the panel mirrors it as its maxlength.
-    const tooLong = await request.post('/capi/assist/chat/stream', {
-      data: {
-        message: 'x'.repeat(1001),
-        conversation_key: `anon-smoke-long-${RUN_ID.slice(0, 8)}`,
-        context_block: '',
-      },
-      timeout: 30_000,
-    })
-    expect(tooLong.status(), 'an over-long anonymous message must be refused').toBe(422)
-    expect(JSON.stringify(await tooLong.json())).toContain('1000')
-
-    // A context of its own, and the storage explicitly emptied.
-    //
-    // `browser.newContext()` inherits the `use` block from
-    // playwright.config.js, storageState included — so a hand-built context
-    // is signed in exactly like the `page` fixture, and omitting the option
-    // does NOT opt out of it. Measured, not assumed: this context reported
-    // `gmr-token` in localStorage and a `fontem_refresh` cookie, and the
-    // panel duly rendered the model picker for a "signed-out" visitor.
-    // Passing an empty state is what makes it a stranger. baseURL and
-    // ignoreHTTPSErrors are repeated for the same inheritance reason in
-    // reverse — they are cheap to state and wrong to guess at.
-    const base = process.env.BASE_URL || 'https://fontem.testing.void42.internal'
-    const anon = await browser.newContext({
-      baseURL: base,
-      ignoreHTTPSErrors: /\.void42\.internal(\/|$|:)/.test(base),
-      storageState: { cookies: [], origins: [] },
-    })
-    try {
-      const page = await anon.newPage()
-
-      // The panel is usable on a public page — the server half is no good
-      // if the UI hides the toggle behind a session.
-      await page.goto('/about')
-      await expect(page.locator('[data-testid="assist-toggle"]')).toBeVisible({ timeout: 15_000 })
-      await page.click('[data-testid="assist-toggle"]')
-      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 10_000 })
-
-      // No model picker without an account: /assist/models is refused, and
-      // the panel must not offer the control rather than render it empty.
-      await expect(page.locator('[data-testid="assist-model-select"]')).toHaveCount(0)
-
-      // The visitor is told why the assistant is smaller than it looks.
-      await expect(page.locator('[data-testid="assist-signed-out-notice"]'))
-        .toBeVisible({ timeout: 10_000 })
-
-      // The input stops them before the server has to. Asserting the
-      // attribute rather than typing 1001 characters: maxlength is what the
-      // browser enforces, and a fill() that silently truncates would pass a
-      // length check while proving nothing.
-      await expect(page.locator('[data-testid="assist-input"]'))
-        .toHaveAttribute('maxlength', '1000')
-    } finally {
-      await anon.close()
-    }
-  })
-
-  test('ASSIST-HISTORY: the conversation records what the agent actually did', async ({ page }) => {
-    test.setTimeout(420_000)
-    test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
-    await uiLogin(page)
-
-    // Its own story, so the conversation is short by construction and this
-    // test reads only its own turns.
-    await page.goto('/my-stories')
-    await page.click('[data-testid="create-btn"]')
-    await page.click('[data-testid="new-story-btn"]')
-    await page.waitForURL(/\/stories\/.*\/edit/, { timeout: 15_000 })
-    const storyForHistory = page.url().match(/\/stories\/([^/]+)\/edit/)?.[1]
-    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
-
-    await page.click('[data-testid="assist-toggle"]')
-    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-
-    // A prompt that cannot be answered without a tool. Two attempts: the
-    // non-prod agent is a 1.7B and the point here is the record it leaves,
-    // not its obedience.
-    const bubble = page.locator('[data-testid^="tool-call-"]')
-      .filter({ hasNot: page.locator('[data-testid="tool-call-body"]') })
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      await sendAssistMessage(page,
-        'Search the GMR graph for Siemens AG using the search_entities tool.')
-      if (await bubble.first().isVisible().catch(() => false)) break
-      expect(attempt, 'the assistant never called a tool in 2 attempts').toBeLessThan(2)
-    }
-
-    // ── What the server kept ───────────────────────────────────
-    //
-    // Read through the API rather than the DOM: the panel could render a
-    // bubble from the live stream and store nothing, which is exactly the
-    // bug this guards. Tool calls used to exist only as SSE events.
-    const token = await freshAccessToken(page)
-    const conv = await page.request.get(
-      `/capi/assist/conversations/report:${storyForHistory}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    )
-    expect(conv.ok(), `conversation fetch failed: ${conv.status()}`).toBeTruthy()
-    const messages = (await conv.json()).messages || []
-
-    const roles = messages.map((m) => m.role)
-    expect(roles, `no user turn recorded: ${JSON.stringify(roles)}`).toContain('user')
-    expect(roles, `no tool call recorded: ${JSON.stringify(roles)}`).toContain('tool')
-
-    const toolRows = messages.filter((m) => m.role === 'tool')
-    const call = toolRows[0]
-    // The tool is named, and named by the id the model was offered.
-    expect(call.content).toMatch(/^mcp__gmr__/)
-    // The arguments are kept — this is what says whether it did what was asked.
-    expect(call.extras?.args, `no arguments recorded: ${JSON.stringify(call.extras)}`)
-      .toBeTruthy()
-    expect(Object.keys(call.extras.args).length).toBeGreaterThan(0)
-    // The result IS kept, as of the per-model context budget. It used to be
-    // dropped so the store would not become mostly tool output, which also
-    // meant the next turn had no idea what the last one found — the model
-    // re-ran searches it had already run, and the panel rendered historical
-    // tool bubbles with an empty body.
-    expect(call.extras, `no result recorded: ${JSON.stringify(call.extras)}`)
-      .toHaveProperty('result')
-    // Bounded, so one row can never be unbounded whatever the tool returned.
-    expect(String(call.extras.result).length).toBeLessThanOrEqual(8_000)
-    // The size of what the tool produced is kept alongside it, which is how
-    // "the model saw less than the tool returned" stays answerable.
-    expect(call.extras).toHaveProperty('bytes')
-    // Addressable, so an activity entry can point at this exact call.
-    expect(call.id, 'the tool row has no id to link to').toBeTruthy()
-
-    // The answer records which model produced it. Every row in production
-    // was NULL before this.
-    const answers = messages.filter((m) => m.role === 'assistant')
-    if (answers.length) {
-      expect(answers[answers.length - 1].model,
-        'the assistant row does not say which model answered').toBeTruthy()
-    }
-
-    // The user turn carries a real token count, not the character estimate
-    // that the reconciliation silently failed to replace.
-    const asked = messages.filter((m) => m.role === 'user')
-    expect(asked[0].tokens_in).toBeGreaterThan(0)
-
-    // ── And it survives a reload ───────────────────────────────
-    await page.reload()
-    await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 15_000 })
-    await page.click('[data-testid="assist-toggle"]')
-    await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-    await expect(bubble.first()).toBeVisible({ timeout: 15_000 })
-
-    // Expanded, a reloaded call shows its arguments and says the result was
-    // not kept — rather than an empty box that reads like it returned nothing.
-    await page.locator('.tool-head').first().click()
-    const body = page.locator('[data-testid="tool-call-body"]').first()
-    await expect(body).toBeVisible({ timeout: 5_000 })
-    await expect(body).toContainText(/not kept/i)
-
-    if (storyForHistory) {
-      await page.request.delete(`/capi/stories/${storyForHistory}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {})
-    }
-  })
-
   test('ASSIST-25: full assistant→edit→save→reload round-trip', async ({ page }) => {
     test.setTimeout(300_000)
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
@@ -3186,63 +2127,6 @@ test.describe.serial('Production Smoke Tests', () => {
     await page.request.delete(`/capi/stories/${localReportId}`, {
       headers: { Authorization: `Bearer ${token}` },
     }).catch(() => {})
-  })
-
-  test('ASSIST-26: a conversation survives a reload and stays reachable', async ({ page }) => {
-    // The production blocker (2026-08-28): prompts sent while editing a
-    // story landed in the story's own chat, which the panel HID — no
-    // switcher on report pages — so after any hiccup the prompt looked
-    // gone forever. This pins the whole loop: send, reload the app,
-    // reopen, and both the message and the way BACK to every other chat
-    // must be there.
-    test.setTimeout(180_000)
-    if (!storyId) test.skip()
-    await uiLogin(page)
-    // The SPA keeps its access token in memory now; localStorage
-    // 'gmr-token' is only whatever storageState happened to carry, and a
-    // null token made this PUT 401 SILENTLY — the turn then ran on the
-    // real model and answered from the global history instead of echoing
-    // (run 28614). Use the injected bootstrap token and assert the switch.
-    const token = await freshAccessToken(page)
-    const pick = async (id) => page.request.put('/capi/assist/models', {
-      headers: { Authorization: `Bearer ${token}` },
-      data: { model_id: id },
-    })
-    const chose = await pick('mock-e2e')
-    test.skip(chose.status() === 422,
-      'scripted model not enabled here (assistMockModel unset)')
-    expect(chose.ok(),
-      `could not select the scripted model: ${chose.status()}`).toBeTruthy()
-    try {
-      await page.goto(`/stories/${storyId}/edit`)
-      await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
-      await page.click('[data-testid="assist-toggle"]')
-      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-
-      const marker = `REVISIT-${RUN_ID.slice(0, 8)}`
-      const reply = await sendAssistMessage(page, `E2E-SCENARIO: echo ${marker}`)
-      expect(reply).toContain(marker)
-
-      // The app restart the user performed, scripted.
-      await page.reload()
-      await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 15_000 })
-      await page.click('[data-testid="assist-toggle"]')
-      await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-
-      // The prompt is still here...
-      await expect(page.locator('[data-testid="assist-messages"]'))
-        .toContainText(marker, { timeout: 15_000 })
-      // ...and so is the way to every other chat. The switcher used to be
-      // absent on report pages, which is what made this chat "hidden".
-      await expect(page.locator('[data-testid="assist-conversation-bar"]'),
-        'the conversation switcher must exist on a report page')
-        .toBeVisible({ timeout: 5_000 })
-      await page.click('[data-testid="assist-conversation-switcher"]')
-      await expect(page.locator('[data-testid="assist-conversation-list"]'))
-        .toBeVisible({ timeout: 5_000 })
-    } finally {
-      await pick('qwen3-1.7b')
-    }
   })
 
   test('ASSIST-27: an open-ended turn of six tool calls completes and the UI survives it', async ({ page }) => {
@@ -3830,72 +2714,4 @@ test.describe.serial('Production Smoke Tests', () => {
   // Keep it last. Anything appended below it will start failing for reasons
   // that have nothing to do with the code it tests.
   // ---------------------------------------------------------------------
-  test('STORY-FLOWERS-2: hitting the 50-cap disables the button with the cap tooltip', async ({ page }) => {
-    // Seed 50 flowers via the API (cheap), then load the story and
-    // assert the button rendered as cap-reached. Locks in the only
-    // load-bearing policy of the feature — if the cap regresses, no
-    // other test catches it.
-    await uiLogin(page)
-    const token = await freshAccessToken(page)
-    if (!token) test.skip()
-    const capStoryId = await page.evaluate(async ({ runId, tok }) => {
-      const r = await fetch('/capi/data-stories', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ title: `Cap Smoke Story ${runId}`, abstract: 'Story under flower-cap smoke test.' }),
-      })
-      if (!r.ok) throw new Error(`create story failed: ${r.status} ${await r.text()}`)
-      const { id } = await r.json()
-      const v = await fetch(`/capi/data-stories/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ title: `Cap Smoke Story ${runId}`, abstract: 'Story under flower-cap smoke test.', visibility: 'public_open' }),
-      })
-      if (!v.ok) throw new Error(`make-public failed: ${v.status} ${await v.text()}`)
-      return id
-    }, { runId: RUN_ID, tok: token })
-
-    try {
-      // Pour 50 flowers in serially — keeps the test independent of
-      // the backend's serialisation guarantees.
-      const final = await page.evaluate(async ({ id, tok }) => {
-        let last = null
-        for (let i = 0; i < 50; i++) {
-          const r = await fetch(`/capi/data-stories/${id}/flowers`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${tok}` },
-          })
-          if (!r.ok) throw new Error(`POST ${i} failed: ${r.status} ${await r.text()}`)
-          last = await r.json()
-        }
-        return last
-      }, { id: capStoryId, tok: token })
-      expect(final.mine).toBe(50)
-      await demoMark(page, `STORY-FLOWERS-2 — capped at 50, button must be disabled`, 1500)
-
-      await page.goto(`/stories/${capStoryId}?cb=${Date.now()}`)
-      const btn = page.locator('[data-testid="flower-button"]')
-      await expect(btn).toBeVisible({ timeout: 15_000 })
-      await expect(btn).toBeDisabled({ timeout: 5_000 })
-      const title = await btn.getAttribute('title')
-      expect(title).toContain('50')
-
-      // 51st click via API must be rejected with 400.
-      const reject = await page.evaluate(async ({ id, tok }) => {
-        const r = await fetch(`/capi/data-stories/${id}/flowers`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${tok}` },
-        })
-        return r.status
-      }, { id: capStoryId, tok: token })
-      expect(reject).toBe(400)
-    } finally {
-      await page.evaluate(async ({ id, tok }) => {
-        await fetch(`/capi/data-stories/${id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${tok}` },
-        })
-      }, { id: capStoryId, tok: token })
-    }
-  })
 })
