@@ -318,8 +318,8 @@ test.describe('briefing card links', () => {
   })
 
   test('BRIEF-LINK-3: following a card lands on the record, not a 404', async ({ browser }) => {
-    // The bug this pins: a query emitting '<origin>/company/' with the id
-    // coalesced away renders a clickable card that resolves to nothing.
+    // The bug this pins: a query emitting a path whose id no route can
+    // resolve renders a clickable card that goes nowhere.
     const { ctx, page } = await anonymousPage(browser)
     const first = page.locator('[data-testid^="feed-briefing-link-"]').first()
     await expect(first).toBeVisible({ timeout: 10_000 })
@@ -330,17 +330,84 @@ test.describe('briefing card links', () => {
     // The SPA answers 200 for every path, so "did it 404" is a DOM
     // question rather than a status-code one.
     await expect(page.locator('.notfound-code')).toHaveCount(0)
-
-    // And the record itself rendered, per destination type.
-    const path = new URL(page.url()).pathname
-    if (path.startsWith('/contract/')) {
-      await expect(page.locator('[data-testid="contract-detail"]')).toBeVisible({ timeout: 20_000 })
-    } else if (path.startsWith('/lobbyist/')) {
-      await expect(page.locator('[data-testid="lobbyist-name"]')).toBeVisible({ timeout: 20_000 })
-    } else {
-      await expect(page.locator('[data-testid="ticker-detail"]')).toBeVisible({ timeout: 20_000 })
-    }
     await ctx.close()
+  })
+
+  /**
+   * Every card, resolved against the API behind its route.
+   *
+   * BRIEF-LINK-3 above follows ONE link, and used to assert the
+   * destination with an if/else on its path — so whichever type that one
+   * link happened to be was the only branch that ever ran. In an
+   * environment whose briefings are all company links, the contract
+   * branch was dead code.
+   *
+   * That is exactly what shipped: the public-contracts query emitted
+   * Contract.contract_key while /api/contracts/{id} matches
+   * Contract.ted_notice_id — two different uuids on the same node — so
+   * every contract card in production was a dead link, and this suite
+   * was green throughout.
+   *
+   * So: check EVERY link, against the API that backs its route rather
+   * than whatever the browser happens to render.
+   */
+  test('BRIEF-LINK-5: every card link resolves to a record that exists', async ({ browser, request }) => {
+    const { ctx, page } = await anonymousPage(browser)
+    const links = page.locator('[data-testid^="feed-briefing-link-"]')
+    const n = await links.count()
+    expect(n, 'no briefing card offered a destination').toBeGreaterThan(0)
+
+    const hrefs = []
+    for (let i = 0; i < n; i++) hrefs.push(await links.nth(i).getAttribute('href'))
+    await ctx.close()
+
+    // route prefix -> [api path, fields that are ALL null only when there
+    // is no record behind the id]
+    //
+    // Status alone is not enough for company and authority:
+    // /api/companies/<nonsense> answers 200 with the id echoed back and
+    // every other field null. So "does this resolve" has to be a question
+    // about the body.
+    //
+    // It asks whether a record EXISTS, not whether it is complete. Those
+    // are different failures and only the first is a broken link: 51,430
+    // of 261,941 cohesion projects point at a company that exists with no
+    // `name`, which renders a thin profile but is a data-quality problem,
+    // not a link pointing nowhere. Demanding a name here would paint this
+    // test red for something it was not written to catch.
+    const RESOLVERS = {
+      contract: ['/api/contracts/', ['title', 'authority']],
+      company: ['/api/companies/', ['company_name', 'country']],
+      authority: ['/api/authorities/', ['authority_name', 'country']],
+      lobbyist: ['/api/lobbyists/', ['name', 'category']],
+    }
+
+    const seen = new Set()
+    for (const href of hrefs) {
+      const [, prefix, id] = href.match(/^\/([a-z]+)\/([^/?#]+)/) || []
+      expect(prefix, `card link is not an entity route: ${href}`).toBeTruthy()
+      const resolver = RESOLVERS[prefix]
+      expect(resolver, `no resolver known for /${prefix}/ — add one`).toBeTruthy()
+
+      const [apiPath, fields] = resolver
+      const res = await request.get(`${apiPath}${id}`)
+      expect(res.status(), `${href} -> ${apiPath}${id} did not resolve`).toBe(200)
+      const body = await res.json()
+      const exists = fields.some((f) => body[f] !== null && body[f] !== undefined)
+      expect(exists, `${href} -> ${apiPath}${id} returned an empty record `
+        + `(all of ${fields.join(', ')} are null) — the id resolves to nothing`).toBe(true)
+      seen.add(prefix)
+    }
+
+    // Not an assertion on WHICH types exist — briefing contents differ per
+    // environment — but the run should say what it covered, so a type
+    // silently absent from the feed is visible in the log rather than
+    // looking like passing coverage. Today no pre-prod environment can
+    // produce a contract card at all: the newest Contract in the shared
+    // tier has publication_date 2024-01-16 and the query window is four
+    // weeks, so `contract` will not appear here until that data is
+    // refreshed.
+    console.log(`BRIEF-LINK-5 resolved ${hrefs.length} link(s) across: ${[...seen].sort().join(', ')}`)
   })
 
   test('BRIEF-LINK-4: a card with no resolvable record is not a dead click', async ({ browser }) => {

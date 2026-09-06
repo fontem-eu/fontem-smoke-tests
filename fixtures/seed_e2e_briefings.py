@@ -58,13 +58,17 @@ SEED_SUB = "e2e-briefings-fixture"
 SEED_ID = str(uuid.uuid5(uuid.NAMESPACE_URL, SEED_SUB))
 SEED_EMAIL = "e2e-briefings-fixture@fontem.internal"
 
-# Dates are relative to today, and the DAY IS PART OF THE item_id, so the
-# fixture genuinely never ages out. Without the day in the id it did:
-# feed_items upserts ON CONFLICT DO NOTHING (to protect first_seen_at), so
-# a row keeps the item_time it was first collected with no matter how
-# often the query re-runs. The dates froze at first collection and drifted
-# out of the runner's FEED_WEEKS window, and every edit to the rows below
-# — a region, a value — was silently ignored for the same reason.
+# Dates are relative to today and the fixture's rows are DELETED before
+# each materialise (see _clear_fixture_items), so they are regenerated
+# fresh every run and genuinely never age out.
+#
+# Neither half is optional. feed_items upserts ON CONFLICT DO NOTHING to
+# protect first_seen_at, so a row can never be corrected in place: without
+# the delete, the dates froze at first collection and drifted out of the
+# runner's FEED_WEEKS window, and every edit to the rows below — a region,
+# a value — was silently ignored. Dating the item_id instead fixed the
+# freezing but grew the fixture by five rows a day, which broke the
+# count-based assertions just as quietly.
 #
 # Regions are deliberately nested — PT192 is inside PT19 is inside PT — so
 # a prefix filter has something to actually discriminate.
@@ -79,7 +83,7 @@ WITH f, toString(date() - duration({days: f.n})) AS day
 WHERE day > left($since, 10)
   AND ('EU' IN $nuts OR any(p IN $nuts WHERE f.region STARTS WITH p))
 RETURN
-  'smoke-fixture:' + toString(f.n) + ':' + day AS item_id,
+  'smoke-fixture:' + toString(f.n) AS item_id,
   day AS item_time,
   [f.region] AS nuts,
   f.value AS rank_value,
@@ -211,6 +215,19 @@ def main():
         die("these published queries no longer satisfy the feed contract: "
             + ", ".join(broken))
 
+    # Clear this fixture's own rows first, so materialising REPLACES them
+    # rather than appending.
+    #
+    # feed_items upserts ON CONFLICT DO NOTHING to protect first_seen_at,
+    # which means a row can never be corrected in place. Dating the
+    # item_id got the fixture unstuck from the frozen timestamps it used
+    # to have, but traded that for unbounded growth: five new rows every
+    # day, all inside the four-week window, so "PT192 is one item"
+    # stopped being true the day after. The fixture owns these rows and
+    # nothing else reads them, so deleting is safe and makes the counts
+    # deterministic again.
+    _clear_fixture_items(database_url, query["id"])
+
     print("\nmaterialising, so the browser has something to read")
     result = subprocess.run([sys.executable, "-m", "src.jobs.run_feeds"],
                             check=False, capture_output=True, text=True)
@@ -218,6 +235,31 @@ def main():
     sys.stderr.write(result.stderr)
     if result.returncode != 0:
         die(f"the feed refresh failed (exit {result.returncode})")
+
+
+def _clear_fixture_items(database_url: str, query_id: str) -> None:
+    """Delete the synthetic briefing's materialised rows.
+
+    Scoped to this one query id: the real briefings' items are never
+    touched.
+    """
+    import asyncio
+
+    import asyncpg
+
+    dsn = database_url.replace("postgresql+asyncpg", "postgresql")
+
+    async def _go() -> None:
+        conn = await asyncpg.connect(dsn)
+        try:
+            done = await conn.execute(
+                "delete from feed_items where query_id = $1", query_id,
+            )
+            print(f"  cleared fixture rows: {done}")
+        finally:
+            await conn.close()
+
+    asyncio.run(_go())
 
 
 if __name__ == "__main__":
