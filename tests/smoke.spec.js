@@ -571,10 +571,21 @@ test.describe.serial('Production Smoke Tests', () => {
     // text when it does not. The count that must hold is linked+unlinked
     // == rows, which is what catches a row silently vanishing (all the
     // unlinked rows used to share the Vue :key `null`).
+    //
+    // `linkable` above is a BOOLEAN — it answers "did the first link
+    // appear", which is what the href assertion needs. It was being
+    // added to a count here, so the arithmetic was `true + unlinked`,
+    // i.e. 1 + unlinked, and the assertion only held when exactly one
+    // row was linked. That was accidentally true while a company page
+    // showed a handful of rows; once owl:sameAs aggregation started
+    // returning Siemens AG's full 100 rows across its closure, the sum
+    // came out 1 instead of 100 and the test failed on data getting
+    // BETTER. Count the linked rows.
     const rowCount = await page.locator('[data-testid^="contract-row-"]').count()
+    const linked = await page.locator('[data-testid^="contract-title-link-"]').count()
     const unlinked = await page.locator('[data-testid="contract-title-unlinked"]').count()
     expect(rowCount).toBeGreaterThan(0)
-    expect(linkable + unlinked).toBe(rowCount)
+    expect(linked + unlinked).toBe(rowCount)
   })
 
   test('PROC-CONTRACT-DETAIL: a contract opens our detail page, which links out to the right TED notice', async ({ page, context }) => {
