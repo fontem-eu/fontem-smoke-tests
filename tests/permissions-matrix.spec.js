@@ -315,9 +315,25 @@ test.describe('Permissions matrix (UI)', () => {
       await expect(page.locator('[data-testid="studio-share-modal"]')).toBeVisible({ timeout: 10_000 })
       await page.fill('[data-testid="studio-share-email"]', x.email)
       await page.selectOption('[data-testid="studio-share-level"]', 'viewer')
+      // Wait on the grant actually being created, not on the row
+      // appearing. addPerson() POSTs /access and only then calls
+      // refresh(), so asserting straight on the row races two requests
+      // and reports "element(s) not found" whichever one is slow —
+      // which says nothing about which half failed. Observed flaky on
+      // 2026-09-07 (failed at 12.0s, passed on retry at 16.0s).
+      const shared = page.waitForResponse(
+        (r) => /\/studio\/projects\/[^/]+\/access$/.test(new URL(r.url()).pathname)
+          && r.request().method() === 'POST',
+        { timeout: 15_000 },
+      )
       await page.click('[data-testid="studio-share-add"]')
+      const shareRes = await shared
+      expect(shareRes.ok(), `share POST failed: ${shareRes.status()}`).toBeTruthy()
+      // If the API rejected it the modal says so — surface that instead
+      // of a bare visibility timeout.
+      await expect(page.locator('[data-testid="studio-share-error"]')).toHaveCount(0)
       await expect(page.locator('[data-testid="studio-grant"]', { hasText: x.email }))
-        .toBeVisible({ timeout: 10_000 })
+        .toBeVisible({ timeout: 15_000 })
       // after grant: outsider can open it read-only
       await openProject(xp.pg, pid)
       await expect(xp.pg.locator('[data-testid="project-readonly"]')).toBeVisible({ timeout: NAV })
