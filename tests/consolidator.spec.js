@@ -1,60 +1,71 @@
 /**
- * gmr-consolidator smoke tests.
+ * Consolidator — the shape of its public edge.
  *
- * Read-only checks against the live consolidator (deployed in `gmr` ns,
- * shared by all envs). Runs alongside the main smoke suite via the same
- * CronJob. Never mutates the graph.
+ * These used to hit /api/consolidator/* through fontem-web's nginx, which
+ * proxied the consolidator's ENTIRE API to the internet with no
+ * authentication of any kind — /consolidate, /resolve, /events/dispatch
+ * and the Neo4j webhook included, all of which write to the graph. That
+ * block was removed deliberately.
+ *
+ * The four routes the admin review screen needs are republished by
+ * fontem-api under /api/consolidator/*, behind its data-admin gate. The
+ * machine-to-machine half is not published at all and reaches the
+ * consolidator over the cluster network instead.
+ *
+ * So the tests assert the security property rather than the old open
+ * behaviour: the write-capable surface is gone from the edge, and what
+ * remains demands a token. That is worth more than what they checked
+ * before, which was that an unauthenticated caller could read internals.
  */
 import { test, expect, request } from '@playwright/test'
 
-// Goes through the gmr-web nginx proxy: /api/consolidator/* → consolidator svc
-// Testing by default — e2e is a promotion gate and never targets prod.
 const BASE = process.env.BASE_URL || 'https://fontem.testing.void42.internal'
 
-test.describe('Consolidator — read-only smoke', () => {
-  test('CON-01: /health returns ok', async () => {
-    const ctx = await request.newContext({ ignoreHTTPSErrors: true })
-    const res = await ctx.get(`${BASE}/api/consolidator/health`)
-    expect(res.status()).toBe(200)
-    const body = await res.json()
-    expect(body.status).toBe('ok')
-  })
+/** Routes fontem-api republishes, all behind require_data_admin. */
+const GATED = ['/api/consolidator/candidates', '/api/consolidator/relationships']
 
-  test('CON-02: /rules lists registered rules with metadata', async () => {
-    const ctx = await request.newContext({ ignoreHTTPSErrors: true })
-    const res = await ctx.get(`${BASE}/api/consolidator/rules`)
-    expect(res.status()).toBe(200)
-    const rules = await res.json()
-    expect(Array.isArray(rules)).toBe(true)
-    expect(rules.length).toBeGreaterThanOrEqual(12)
+/**
+ * Routes that must NOT be reachable from the edge. /health and /rules
+ * expose internals; the rest write to the graph. None is republished, so
+ * each falls through to fontem-api's /api/ handler and 404s.
+ */
+const UNPUBLISHED = [
+  '/api/consolidator/health',
+  '/api/consolidator/rules',
+  '/api/consolidator/consolidate/batch',
+  '/api/consolidator/events/dispatch',
+  '/api/consolidator/webhooks/neo4j-trigger',
+]
 
-    const names = rules.map(r => r.name)
-    // Spot-check key rules
-    for (const expected of [
-      'exact_lei_match',
-      'exact_vat_match',
-      'exact_name_country_match',
-      'fuzzy_name_same_country',
-      'gds_node_similarity_company',
-      'gds_node_similarity_authority',
-      'exact_authority_id_match',
-    ]) {
-      expect(names).toContain(expected)
-    }
+test.describe('Consolidator — public edge', () => {
+  for (const path of UNPUBLISHED) {
+    test(`CON-01 ${path} is not published at the edge`, async () => {
+      const ctx = await request.newContext({ ignoreHTTPSErrors: true })
+      const res = await ctx.get(`${BASE}${path}`)
+      // 404 because the route does not exist here. A 200 would mean the
+      // nginx proxy came back and the write API is on the internet again.
+      expect(res.status(), `${path} answered ${res.status()}`).toBe(404)
+    })
+  }
 
-    // Each rule has the metadata the UI cards need
-    for (const r of rules) {
-      expect(r.confidence).toBeGreaterThan(0)
-      expect(['merge', 'link', 'flag', 'noop', 'enrich']).toContain(r.action)
-      expect(Array.isArray(r.entity_types)).toBe(true)
-    }
-  })
+  for (const path of GATED) {
+    test(`CON-02 ${path} requires a token`, async () => {
+      const ctx = await request.newContext({ ignoreHTTPSErrors: true })
+      const res = await ctx.get(`${BASE}${path}?limit=1`)
+      // 401: no credentials. Not 200 — that was the old behaviour and is
+      // the regression this guards. Not 404 either: the route must still
+      // exist for the review screen.
+      expect([401, 403], `${path} answered ${res.status()}`)
+        .toContain(res.status())
+    })
 
-  test('CON-03: /candidates is read-only and pagination-safe', async () => {
-    const ctx = await request.newContext({ ignoreHTTPSErrors: true })
-    const res = await ctx.get(`${BASE}/api/consolidator/candidates?reviewed=false&limit=1`)
-    expect(res.status()).toBe(200)
-    const body = await res.json()
-    expect(Array.isArray(body)).toBe(true)
-  })
+    test(`CON-03 ${path} rejects a junk token`, async () => {
+      const ctx = await request.newContext({ ignoreHTTPSErrors: true })
+      const res = await ctx.get(`${BASE}${path}?limit=1`, {
+        headers: { Authorization: 'Bearer not-a-real-token' },
+      })
+      expect([401, 403], `${path} answered ${res.status()}`)
+        .toContain(res.status())
+    })
+  }
 })
