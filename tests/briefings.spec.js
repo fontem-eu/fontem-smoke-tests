@@ -290,6 +290,51 @@ test.describe('briefing card links', () => {
     return { ctx, page }
   }
 
+  test('BRIEF-CARD-1: a card lays out the parts, not the sentence', async ({ page }) => {
+    // The card used to print the query's sentence — "synthetic award of
+    // 4200000 EUR in PT192" — six lines of it on a phone, with the item's
+    // own title clamped underneath. Now the query emits the parts as
+    // `facets` and the card gives each its place: headline, value, an
+    // integrity badge, and buyer → supplier as a structure. This pins that
+    // the parts reach the DOM from the fixture's known values.
+    // Everywhere, at a volume that admits all five rows: the fixture's
+    // regions span PT, ES and DE, and the three badge states are spread
+    // across them, so a PT-scoped watch would never show the clean row.
+    await page.getByTestId('briefing-e2e-smoke').click()
+    const panel = page.getByTestId('panel-e2e-smoke')
+    await panel.getByTestId('volume-e2e-smoke').selectOption('25')
+    await panel.getByTestId('add-e2e-smoke').click()
+    await expect(page.getByTestId('watching-e2e-smoke')).toContainText('1')
+
+    await page.goto('/')
+    await expect(page.locator('[data-testid="feed-briefings"]')).toBeVisible({ timeout: 30_000 })
+    // Row 1: the single bidder with one flag.
+    const card = page.locator('li[data-testid="feed-briefing-smoke-fixture:1"]')
+    await expect(card).toBeVisible({ timeout: 15_000 })
+
+    await expect(card.locator('[data-testid="feed-briefing-what-smoke-fixture:1"]'))
+      .toHaveText('SMOKE TEST FIXTURE 1 — synthetic works contract')
+    const relation = card.locator('[data-testid="feed-briefing-relation-smoke-fixture:1"]')
+    await expect(relation).toContainText('Fixture Authority 1')
+    await expect(relation).toContainText('→')
+    await expect(relation).toContainText('Fixture Supplier 1')
+    await expect(card.locator('[data-testid="feed-briefing-value-smoke-fixture:1"]'))
+      .toContainText(/4[.,]2\s?M/)
+    const badge = card.locator('[data-testid="feed-briefing-integrity-smoke-fixture:1"]')
+    await expect(badge).toBeVisible()
+    await expect(badge).toHaveClass(/bcard-badge--warn/)
+    await expect(badge).toContainText(/single bidder/i)
+    // The sentence is gone from the card: its parts have their own places.
+    await expect(card).not.toContainText('synthetic award of')
+
+    // Row 3 is the clean one: zero flags is a green finding, not silence.
+    await expect(page.locator('[data-testid="feed-briefing-integrity-smoke-fixture:3"]'))
+      .toHaveClass(/bcard-badge--ok/)
+    // Row 2 carries two: that is the hard look.
+    await expect(page.locator('[data-testid="feed-briefing-integrity-smoke-fixture:2"]'))
+      .toHaveClass(/bcard-badge--bad/)
+  })
+
   test('BRIEF-LINK-1: the landing feed carries briefing cards for a stranger', async ({ browser }) => {
     // The signed-out seed is a product promise. If it is empty the rest
     // of this group is vacuous, so it fails here loudly rather than
