@@ -2171,6 +2171,17 @@ test.describe.serial('Production Smoke Tests', () => {
   // in CookieConsentBanner.vue (exports `--cookie-banner-h`) + AssistPanel.vue
   // (reads it as padding-bottom).
   test('ASSIST-PRE-19: assistant input stays visible above the cookie banner', async ({ page }) => {
+    // 180s, matching the rest of the ASSIST battery, and for a reason
+    // specific to this test: it is the FIRST one to call llmAvailable(),
+    // so it is the one that pays for the probe. llmAvailable() memoises,
+    // and its request carries req.setTimeout(90_000) — a budget larger
+    // than this test's own default of 60s. A slow-but-working LLM
+    // therefore times out the test before the probe it is waiting on can
+    // even return, and the retry passes because _llmOk is cached by then.
+    // That is what made it flaky: not the layout assertion, the probe in
+    // front of it. Every other ASSIST test already sets 180s and so never
+    // sees this.
+    test.setTimeout(180_000)
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
