@@ -72,6 +72,13 @@ SEED_EMAIL = "e2e-briefings-fixture@fontem.internal"
 #
 # Regions are deliberately nested — PT192 is inside PT19 is inside PT — so
 # a prefix filter has something to actually discriminate.
+#
+# `facets` carries the parts a card lays out (fontem-community-api #272):
+# headline, buyer → supplier, value, and an integrity count. The count is
+# n mod 3 so the five rows cover all three badge states — 1, 2, 0, 1, 2 —
+# and row 1 is the single bidder, so the badge's reason text is exercised
+# too. Deterministic on purpose: the gate asserts the structured row and
+# badge against these exact values.
 QUERY = """UNWIND [
   {n: 1, region: 'PT192', value: 4200000.0},
   {n: 2, region: 'PT150', value: 1750000.0},
@@ -90,7 +97,19 @@ RETURN
   'SMOKE TEST FIXTURE ' + toString(f.n) + ' — synthetic award of ' +
     toString(toInteger(f.value)) + ' EUR in ' + f.region AS title,
   'https://fontem.eu/briefings' AS link,
-  'Synthetic item created by the e2e promotion gate. Not real data.' AS summary
+  'Synthetic item created by the e2e promotion gate. Not real data.' AS summary,
+  {
+    kind: 'contract',
+    headline: 'SMOKE TEST FIXTURE ' + toString(f.n) + ' — synthetic works contract',
+    from: 'Fixture Authority ' + toString(f.n),
+    from_more: 0,
+    to: ['Fixture Supplier ' + toString(f.n)],
+    to_more: 0,
+    value_eur: f.value,
+    red_flags: f.n % 3,
+    single_bidder: f.n = 1,
+    tenders: CASE WHEN f.n = 1 THEN 1 ELSE 4 END
+  } AS facets
 ORDER BY item_time DESC, rank_value DESC"""
 
 DESCRIPTION = (
