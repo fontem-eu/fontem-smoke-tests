@@ -82,6 +82,32 @@ async function freshAccessToken(page) {
 }
 
 /**
+ * Take the shared account off the scripted model if a killed run left it
+ * there.
+ *
+ * ASSIST-23, 24, 28, 26 and 27 pick `mock-e2e` and restore `qwen3-1.7b` in a
+ * `finally` -- which never runs when the runner itself is killed. A promote
+ * run cancelled by a newer one (the workflow cancels in progress) does
+ * exactly that, and the next run's ASSIST-19 then asks the mock a real
+ * question and gets "MOCK-OK: no scenario requested" (promote 1580,
+ * 2026-09-11, after 1576 and 1578 were cancelled). Acts only on that leaked
+ * state: an account on any other model -- and every prod account, where the
+ * scripted model does not exist -- is left alone.
+ */
+async function takeAccountOffTheMock(page) {
+  const token = await freshAccessToken(page)
+  const headers = { Authorization: `Bearer ${token}` }
+  const res = await page.request.get('/capi/assist/models', { headers })
+  if (!res.ok()) return
+  const { selected } = await res.json()
+  if (selected !== 'mock-e2e') return
+  const put = await page.request.put('/capi/assist/models', {
+    headers, data: { model_id: 'qwen3-1.7b' },
+  })
+  expect(put.ok(), `could not take the account off the scripted model: ${put.status()}`).toBeTruthy()
+}
+
+/**
  * Publish whatever is in this editor's draft.
  *
  * Saving no longer changes the article readers see: an editor's save
@@ -2241,6 +2267,8 @@ test.describe.serial('Production Smoke Tests', () => {
     if (!storyId) test.skip()
     test.skip(!(await llmAvailable()), 'assistant LLM unavailable in this environment (upstream key rejected)')
     await uiLogin(page)
+    // The first real-model turn in the file: heal a mock choice a killed run left.
+    await takeAccountOffTheMock(page)
     await page.goto(`/stories/${storyId}/edit`)
     await expect(page.locator('[data-testid="editor-body"]')).toBeVisible({ timeout: 10_000 })
 
