@@ -297,6 +297,12 @@ test.describe('briefing card links', () => {
     // `facets` and the card gives each its place: headline, value, an
     // integrity badge, and buyer → supplier as a structure. This pins that
     // the parts reach the DOM from the fixture's known values.
+    // This describe has no beforeEach: the LINK tests open their own
+    // anonymous pages. This one needs the signed-in catalogue, from a
+    // clean slate, like the watch tests above.
+    await page.goto('/briefings')
+    await clearWatches(page)
+    await page.reload()
     // Everywhere, at a volume that admits all five rows: the fixture's
     // regions span PT, ES and DE, and the three badge states are spread
     // across them, so a PT-scoped watch would never show the clean row.
