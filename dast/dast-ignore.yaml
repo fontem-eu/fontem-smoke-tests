@@ -250,6 +250,29 @@ ignore:
     added: 2026-09-01
     max_instances: 120
 
+  # ── Money totals in API JSON ─────────────────────────────────────────
+  - alert: Timestamp Disclosure - Unix
+    url_regex: "/api/(data-quality/contracts/(currency-quality|value-timeline)|authorities/[^/]+/contracts|graph/[^/]+)$"
+    reason: >-
+      Ten-digit integer parts of EUR amounts in contract data, read as
+      Unix timestamps by a regex. The data tier now holds billion-euro
+      contract totals (2026 notices loaded on 2026-09-12), so these
+      aggregates crossed ten digits.
+    evidence: >-
+      Read from the API container in fontem-dast on 2026-09-13:
+      currency-quality carries 5 such tokens, all "total_eur" values
+      (e.g. NOK total_eur 9979568572.77, GBP 2017560100.06, BGN
+      4720332806.58); value-timeline carries 139, all per-day "value"
+      sums (e.g. 2024-02-01 1139390379.04, 2023-12-21 1207259110.84).
+      The authorities/{id}/contracts and graph/{id} responses carry the
+      same value_eur fields per contract. Every token sits behind a
+      money key and has a fractional part; 2017560100 would read as
+      2033-12-10, 9979568572 is past 2286 — no clock produces them.
+      Scoped to these four response shapes; the alert on any other API
+      path still fails the gate.
+    added: 2026-09-13
+    max_instances: 20
+
   # ── Numeric constants in a minified bundle ───────────────────────────
   - alert: Timestamp Disclosure - Unix
     url_regex: "/assets/"
