@@ -56,6 +56,27 @@ async function openSwitcher(page) {
   await expect(page.locator('[data-testid="assist-conversation-list"]')).toBeVisible()
 }
 
+/**
+ * Click "New chat" and wait until the created chat exists server-side.
+ *
+ * Opening the switcher straight after the click races the create: the list
+ * request can be answered before the new chat commits, and the row the test
+ * then acts on is someone else's (promote-attest 12601 renamed and deleted a
+ * report conversation that way on its retry).
+ */
+async function startNewChat(page) {
+  const created = page.waitForResponse((r) => r.request().method() === 'POST'
+    && /\/capi\/assist\/conversations(\?|$)/.test(r.url()))
+  await page.locator('[data-testid="assist-new-conversation"]').click()
+  expect((await created).status()).toBe(201)
+}
+
+/** The rename button on the active chat's row, i.e. the one just created. */
+function activeRename(page) {
+  return page.locator('[data-testid="assist-conversation-row"].assist-conv-row--active')
+    .locator('[data-testid="assist-conversation-rename"]')
+}
+
 /** The row for a chat with this exact name. */
 function rowByName(page, name) {
   return page.locator('[data-testid="assist-conversation-row"]').filter({ hasText: name })
@@ -71,9 +92,9 @@ function rowByName(page, name) {
  * sort first. Both read as product bugs when they break.
  */
 async function createNamedChat(page, name) {
-  await page.locator('[data-testid="assist-new-conversation"]').click()
+  await startNewChat(page)
   await openSwitcher(page)
-  await page.locator('[data-testid="assist-conversation-rename"]').first().click()
+  await activeRename(page).click()
   const input = page.locator('[data-testid="assist-conversation-rename-input"]')
   await input.fill(name)
   await input.press('Enter')
@@ -132,11 +153,11 @@ test.describe('Assistant chat tabs', () => {
 
   test('CHAT-TABS-03: a chat can be renamed, and the name sticks', async ({ page }, testInfo) => {
     await openAssistant(page)
-    await page.locator('[data-testid="assist-new-conversation"]').click()
+    await startNewChat(page)
     await openSwitcher(page)
 
     const name = `Renamed ${RUN}-${testInfo.retry}`
-    await page.locator('[data-testid="assist-conversation-rename"]').first().click()
+    await activeRename(page).click()
     const input = page.locator('[data-testid="assist-conversation-rename-input"]')
     await input.fill(name)
     await input.press('Enter')
