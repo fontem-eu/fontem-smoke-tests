@@ -664,30 +664,43 @@ test.describe.serial('Production Smoke Tests', () => {
     await demoMark(page, 'From the detail page, open the original TED notice')
     const tedOut = page.locator('[data-testid="ted-outlink"]')
     await expect(tedOut).toBeVisible()
+    let tedUrl = await tedOut.getAttribute('href') || ''
+    // A contract without a stored publication number links to our redirector,
+    // which translates the eForms UUID into TED's publication number.
+    if (tedUrl.startsWith('/api/contracts/')) {
+      const hop = await page.request.get(tedUrl, { maxRedirects: 0 })
+      expect(hop.status(), `${tedUrl} should redirect to TED`).toBe(302)
+      tedUrl = hop.headers().location || ''
+    }
+    // Never the blank-UUID page: TED renders a notice only when it is
+    // addressed by publication number.
+    const pub = tedUrl.match(/^https:\/\/ted\.europa\.eu\/[a-z]{2}\/notice\/-\/detail\/(\d+-\d{4})$/)
+    expect(pub, `TED outlink is not a publication-number detail URL: ${tedUrl}`).toBeTruthy()
+
+    // ...and that publication number is THIS contract. Ask TED's search API:
+    // the detail page answers automated clients with an empty 202 bot
+    // challenge, so waiting on its rendered text measured TED's WAF, not our
+    // link (PROC-CONTRACT-DETAIL failed twice in attest-staging 12573 on a
+    // correct link, the first run in which this dataset had one to follow).
+    const normTed = (t) => (t || '').toLowerCase().replace(/\s+/g, ' ')
+    const wantChunk = normTed(contractTitle).slice(0, 14)
+    const search = await page.request.post('https://api.ted.europa.eu/v3/notices/search', {
+      data: { query: `publication-number=${pub[1]}`, fields: ['notice-title', 'title-proc', 'title-lot'], limit: 1 },
+    })
+    expect(search.status(), `TED search for ${pub[1]}`).toBe(200)
+    const notice = (await search.json()).notices?.[0]
+    expect(notice, `TED has no notice ${pub[1]}`).toBeTruthy()
+    const tedTitles = normTed(JSON.stringify([notice['title-proc'], notice['notice-title'], notice['title-lot']]))
+    expect(tedTitles, `TED notice ${pub[1]} is not about "${contractTitle.slice(0, 40)}"`).toContain(wantChunk)
+
+    // The click still opens TED at exactly that notice.
     const [popup] = await Promise.all([
       context.waitForEvent('page', { timeout: 30_000 }),
       tedOut.click(),
     ])
-    await popup.waitForLoadState('domcontentloaded', { timeout: 30_000 })
-    await popup.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
-    // We land on TED, on a real (non-blank) page about this contract.
-    expect(popup.url()).toMatch(/ted\.europa\.eu/)
-    // The external TED page hydrates asynchronously and we don't control its
-    // render timing — poll its *rendered text* (substantive AND about THIS
-    // contract) instead of waiting on a single element's visibility, which
-    // races the external render and was the source of intermittent flakes.
-    const normTed = (t) => (t || '').toLowerCase().replace(/\s+/g, ' ')
-    const wantChunk = normTed(contractTitle).slice(0, 14)
-    await expect
-      .poll(async () => {
-        const t = normTed(await popup.locator('body').innerText().catch(() => ''))
-        return t.length > 200 && t.includes(wantChunk)
-      }, {
-        timeout: 35_000,
-        message: `TED notice should render substantive text incl. "${contractTitle.slice(0, 20)}"`,
-      })
-      .toBe(true)
-    await demoMark(page, 'TED page shows the contract title ✓', 2500)
+    await popup.waitForURL(/ted\.europa\.eu/, { timeout: 30_000 })
+    expect(popup.url(), 'the popup opens the linked notice').toContain(pub[1])
+    await demoMark(page, `TED notice ${pub[1]} is this contract ✓`, 2500)
     await popup.close()
   })
 
