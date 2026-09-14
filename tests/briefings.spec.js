@@ -18,6 +18,7 @@
  * file was missing from playwright.config's testMatch and had never run.
  */
 import { test, expect } from './baseTest.js'
+import { getHonouringRateLimit } from './rateLimit.js'
 
 const FIXTURE = 'E2E smoke'
 const FIXTURE_TITLE = /SMOKE TEST FIXTURE/
@@ -436,25 +437,11 @@ test.describe('briefing card links', () => {
       lobbyist: ['/api/lobbyists/', ['name', 'category']],
     }
 
-    // The /api/ location allows 30 r/s with a burst of 100 per client, and
-    // the whole suite is one client. With contract cards in the feed this
-    // loop resolves 100+ links back to back, and the tail of the burst came
-    // back 429 (attest-staging 12573). A 429 says "slow down", not "there is
-    // no record": wait as told and ask again, and fail only on a real
-    // non-200 or on a limit that never lifts.
-    const getHonouringRateLimit = async (url) => {
-      for (let attempt = 1; ; attempt++) {
-        const res = await request.get(url)
-        if (res.status() !== 429 || attempt === 5) return res
-        const retryAfter = Number(res.headers()['retry-after'])
-        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
-          ? Math.min(retryAfter * 1000, 5000)
-          : Math.min(500 * 2 ** attempt, 5000)
-        await new Promise((r) => { setTimeout(r, waitMs) })
-      }
-    }
+    // A card-link sweep resolves 100+ links back to back, which runs into the
+    // edge's per-client burst (attest-staging 12573); getHonouringRateLimit
+    // waits those out and fails only on a real non-200 or a limit that never
+    // lifts.
 
-    const seen = new Set()
     for (const href of distinct) {
       const [, prefix, id] = href.match(/^\/([a-z]+)\/([^/?#]+)/) || []
       expect(prefix, `card link is not an entity route: ${href}`).toBeTruthy()
@@ -462,7 +449,7 @@ test.describe('briefing card links', () => {
       expect(resolver, `no resolver known for /${prefix}/ — add one`).toBeTruthy()
 
       const [apiPath, fields] = resolver
-      const res = await getHonouringRateLimit(`${apiPath}${id}`)
+      const res = await getHonouringRateLimit(request, `${apiPath}${id}`)
       expect(res.status(), `${href} -> ${apiPath}${id} did not resolve`).toBe(200)
       const body = await res.json()
       const exists = fields.some((f) => body[f] !== null && body[f] !== undefined)

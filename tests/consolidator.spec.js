@@ -18,6 +18,7 @@
  * before, which was that an unauthenticated caller could read internals.
  */
 import { test, expect, request } from '@playwright/test'
+import { getHonouringRateLimit } from './rateLimit.js'
 
 const BASE = process.env.BASE_URL || 'https://fontem.testing.void42.internal'
 
@@ -41,7 +42,7 @@ test.describe('Consolidator — public edge', () => {
   for (const path of UNPUBLISHED) {
     test(`CON-01 ${path} is not published at the edge`, async () => {
       const ctx = await request.newContext({ ignoreHTTPSErrors: true })
-      const res = await ctx.get(`${BASE}${path}`)
+      const res = await getHonouringRateLimit(ctx, `${BASE}${path}`)
       // 404 because the route does not exist here. A 200 would mean the
       // nginx proxy came back and the write API is on the internet again.
       expect(res.status(), `${path} answered ${res.status()}`).toBe(404)
@@ -51,7 +52,7 @@ test.describe('Consolidator — public edge', () => {
   for (const path of GATED) {
     test(`CON-02 ${path} requires a token`, async () => {
       const ctx = await request.newContext({ ignoreHTTPSErrors: true })
-      const res = await ctx.get(`${BASE}${path}?limit=1`)
+      const res = await getHonouringRateLimit(ctx, `${BASE}${path}?limit=1`)
       // 401: no credentials. Not 200 — that was the old behaviour and is
       // the regression this guards. Not 404 either: the route must still
       // exist for the review screen.
@@ -61,7 +62,7 @@ test.describe('Consolidator — public edge', () => {
 
     test(`CON-03 ${path} rejects a junk token`, async () => {
       const ctx = await request.newContext({ ignoreHTTPSErrors: true })
-      const res = await ctx.get(`${BASE}${path}?limit=1`, {
+      const res = await getHonouringRateLimit(ctx, `${BASE}${path}?limit=1`, {
         headers: { Authorization: 'Bearer not-a-real-token' },
       })
       expect([401, 403], `${path} answered ${res.status()}`)
