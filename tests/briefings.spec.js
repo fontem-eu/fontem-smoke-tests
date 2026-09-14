@@ -441,7 +441,7 @@ test.describe('briefing card links', () => {
     // edge's per-client burst (attest-staging 12573); getHonouringRateLimit
     // waits those out and fails only on a real non-200 or a limit that never
     // lifts.
-
+    const seen = new Set()
     for (const href of distinct) {
       const [, prefix, id] = href.match(/^\/([a-z]+)\/([^/?#]+)/) || []
       expect(prefix, `card link is not an entity route: ${href}`).toBeTruthy()
