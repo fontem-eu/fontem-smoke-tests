@@ -117,9 +117,21 @@ async function createNamedChat(page, name) {
  */
 async function purgeEmptyChats(request) {
   const auth = { Authorization: `Bearer ${ownerToken()}` }
-  const listed = await request.get('/capi/assist/conversations', { headers: auth })
-  if (!listed.ok()) return 0
-  const empty = (await listed.json()).conversations.filter((c) => c.message_count === 0)
+  // The list is paged (newest first); walk every page, or the purge only ever
+  // sees the newest fifty and the account keeps growing underneath it. An API
+  // that predates paging answers everything with no `has_more`, which ends
+  // the loop after one request.
+  const empty = []
+  let before = ''
+  for (let page = 0; page < 100; page += 1) {
+    const qs = before ? `?limit=200&before=${encodeURIComponent(before)}` : '?limit=200'
+    const listed = await request.get(`/capi/assist/conversations${qs}`, { headers: auth })
+    if (!listed.ok()) break
+    const body = await listed.json()
+    empty.push(...body.conversations.filter((c) => c.message_count === 0))
+    if (!body.has_more || !body.next_before) break
+    before = body.next_before
+  }
   let removed = 0
   for (const c of empty) {
     const r = await request.delete(
