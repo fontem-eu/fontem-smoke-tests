@@ -408,8 +408,11 @@ test.describe('briefing card links', () => {
     const n = await links.count()
     expect(n, 'no briefing card offered a destination').toBeGreaterThan(0)
 
+    // Distinct destinations: two cards about the same record are one link
+    // to check, not two requests against the rate limit.
     const hrefs = []
     for (let i = 0; i < n; i++) hrefs.push(await links.nth(i).getAttribute('href'))
+    const distinct = [...new Set(hrefs)]
     await ctx.close()
 
     // route prefix -> [api path, fields that are ALL null only when there
@@ -433,15 +436,33 @@ test.describe('briefing card links', () => {
       lobbyist: ['/api/lobbyists/', ['name', 'category']],
     }
 
+    // The /api/ location allows 30 r/s with a burst of 100 per client, and
+    // the whole suite is one client. With contract cards in the feed this
+    // loop resolves 100+ links back to back, and the tail of the burst came
+    // back 429 (attest-staging 12573). A 429 says "slow down", not "there is
+    // no record": wait as told and ask again, and fail only on a real
+    // non-200 or on a limit that never lifts.
+    const getHonouringRateLimit = async (url) => {
+      for (let attempt = 1; ; attempt++) {
+        const res = await request.get(url)
+        if (res.status() !== 429 || attempt === 5) return res
+        const retryAfter = Number(res.headers()['retry-after'])
+        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+          ? Math.min(retryAfter * 1000, 5000)
+          : Math.min(500 * 2 ** attempt, 5000)
+        await new Promise((r) => { setTimeout(r, waitMs) })
+      }
+    }
+
     const seen = new Set()
-    for (const href of hrefs) {
+    for (const href of distinct) {
       const [, prefix, id] = href.match(/^\/([a-z]+)\/([^/?#]+)/) || []
       expect(prefix, `card link is not an entity route: ${href}`).toBeTruthy()
       const resolver = RESOLVERS[prefix]
       expect(resolver, `no resolver known for /${prefix}/ — add one`).toBeTruthy()
 
       const [apiPath, fields] = resolver
-      const res = await request.get(`${apiPath}${id}`)
+      const res = await getHonouringRateLimit(`${apiPath}${id}`)
       expect(res.status(), `${href} -> ${apiPath}${id} did not resolve`).toBe(200)
       const body = await res.json()
       const exists = fields.some((f) => body[f] !== null && body[f] !== undefined)
@@ -453,12 +474,9 @@ test.describe('briefing card links', () => {
     // Not an assertion on WHICH types exist — briefing contents differ per
     // environment — but the run should say what it covered, so a type
     // silently absent from the feed is visible in the log rather than
-    // looking like passing coverage. Today no pre-prod environment can
-    // produce a contract card at all: the newest Contract in the shared
-    // tier has publication_date 2024-01-16 and the query window is four
-    // weeks, so `contract` will not appear here until that data is
-    // refreshed.
-    console.log(`BRIEF-LINK-5 resolved ${hrefs.length} link(s) across: ${[...seen].sort().join(', ')}`)
+    // looking like passing coverage.
+    console.log(`BRIEF-LINK-5 resolved ${distinct.length} distinct link(s) from ${hrefs.length} card(s) `
+      + `across: ${[...seen].sort().join(', ')}`)
   })
 
   test('BRIEF-LINK-4: a card with no resolvable record is not a dead click', async ({ browser }) => {
