@@ -270,8 +270,15 @@ ignore:
       2033-12-10, 9979568572 is past 2286 — no clock produces them.
       Scoped to these four response shapes; the alert on any other API
       path still fails the gate.
+      Re-triaged 2026-09-16: the 00:16 scan counted 23 matches against
+      a limit of 20, all on these four URL shapes, while the TED backfill
+      kept adding billion-euro contracts. Two of the shapes are per entity
+      (authorities/{id}/contracts, graph/{id}), so the count follows how
+      many entities the suite visits rather than a new kind of finding.
+      The URL scope, not the count, is what stops this rule hiding a real
+      timestamp.
     added: 2026-09-13
-    max_instances: 20
+    max_instances: 40
 
   # ── Numeric constants in a minified bundle ───────────────────────────
   - alert: Timestamp Disclosure - Unix
