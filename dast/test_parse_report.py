@@ -80,3 +80,23 @@ def test_key_version_was_bumped():
     # A key change must re-baseline, otherwise every old finding reads as
     # new exactly once and the next run fails for the wrong reason.
     assert parse_report.KEY_VERSION >= 3
+
+
+def test_the_money_rule_covers_the_contract_shapes_the_suite_requests():
+    """Every API shape the EUR-totals rule was triaged for is suppressed,
+    query string or not; the same alert anywhere else still counts."""
+    import yaml
+    rules = yaml.safe_load((pathlib.Path(__file__).parent / "dast-ignore.yaml").read_text())["ignore"]
+    money = next(r for r in rules
+                 if r["alert"] == "Timestamp Disclosure - Unix" and "graph" in r.get("url_regex", ""))
+    host = "https://fontem.dast.void42.internal"
+    def alert(path):
+        return {"alert": "Timestamp Disclosure - Unix", "url": host + path}
+    for path in ("/api/data-quality/contracts/by-country",
+                 "/api/data-quality/contracts/value-timeline",
+                 "/api/authorities/97cebd5c-0b1a-527b-b8fb-8053ee35f2a8/contracts?limit=100",
+                 "/api/companies/2c1f32c2-90d0-5bb0-a080-791da65bedd8/contracts?limit=100",
+                 "/api/graph/2c1f32c2-90d0-5bb0-a080-791da65bedd8"):
+        assert parse_report._matches(alert(path), money), path
+    for path in ("/api/search?q=x", "/api/companies/2c1f32c2/profile", "/capi/users/me"):
+        assert not parse_report._matches(alert(path), money), path

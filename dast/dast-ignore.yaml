@@ -252,7 +252,7 @@ ignore:
 
   # ── Money totals in API JSON ─────────────────────────────────────────
   - alert: Timestamp Disclosure - Unix
-    url_regex: "/api/(data-quality/contracts/(currency-quality|value-timeline)|authorities/[^/]+/contracts|graph/[^/]+)$"
+    url_regex: "/api/(data-quality/contracts/(currency-quality|value-timeline|by-country)|(authorities|companies)/[^/]+/contracts|graph/[^/]+)(\\?.*)?$"
     reason: >-
       Ten-digit integer parts of EUR amounts in contract data, read as
       Unix timestamps by a regex. The data tier now holds billion-euro
@@ -277,6 +277,15 @@ ignore:
       many entities the suite visits rather than a new kind of finding.
       The URL scope, not the count, is what stops this rule hiding a real
       timestamp.
+      Widened 2026-09-17: the 11:34 scan counted five matches on shapes
+      the rule missed, all read back from the dast API:
+      data-quality/contracts/by-country "total_eur" (1613369348.15,
+      1500789197.19); authorities/{id}/contracts?limit=100
+      "value_original" (1631435000, 2000000000); and a contract title in
+      companies/{id}/contracts?limit=100 that starts with a ten-digit
+      reference ("2000069561 Deutsche Bundesbank, ..."). The pattern
+      also allows a query string, which the suite's `?limit=100`
+      requests carry and the old `$` anchor refused.
     added: 2026-09-13
     max_instances: 40
 
