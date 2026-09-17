@@ -252,7 +252,7 @@ ignore:
 
   # ── Money totals in API JSON ─────────────────────────────────────────
   - alert: Timestamp Disclosure - Unix
-    url_regex: "/api/(data-quality/contracts/(currency-quality|value-timeline)|authorities/[^/]+/contracts|graph/[^/]+)$"
+    url_regex: "/api/(data-quality/contracts/(currency-quality|value-timeline)|(authorities|companies)/[^/]+/contracts|graph/[^/]+)(\\?.*)?$"
     reason: >-
       Ten-digit integer parts of EUR amounts in contract data, read as
       Unix timestamps by a regex. The data tier now holds billion-euro
@@ -268,8 +268,10 @@ ignore:
       same value_eur fields per contract. Every token sits behind a
       money key and has a fractional part; 2017560100 would read as
       2033-12-10, 9979568572 is past 2286 — no clock produces them.
-      Scoped to these four response shapes; the alert on any other API
-      path still fails the gate.
+      Scoped to these response shapes; the alert on any other API path
+      still fails the gate. 2026-09-17: companies/{id}/contracts (the same
+      value_eur fields per contract) added, and a query string allowed —
+      authorities/{id}/contracts?… had slipped past the anchored regex.
       Re-triaged 2026-09-16: the 00:16 scan counted 23 matches against
       a limit of 20, all on these four URL shapes, while the TED backfill
       kept adding billion-euro contracts. Two of the shapes are per entity
