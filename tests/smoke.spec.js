@@ -614,6 +614,58 @@ test.describe.serial('Production Smoke Tests', () => {
     expect(linked + unlinked).toBe(rowCount)
   })
 
+  test('PROC-CONTRACT-SORT: the contracts list opens newest-first and can be ordered by value', async ({ page, request }) => {
+    // The list used to arrive in no order at all: the API returned the
+    // newest 100, and the panel then re-sorted them client-side with a
+    // comparator that treated a missing value as '' — on a typical
+    // authority most contracts carry no value, so nearly every
+    // comparison was number-vs-string and the rows landed arbitrarily.
+    // Ordering now happens in the query, which is also what makes
+    // `limit` mean "the top 100 of this ordering".
+    const AUTH = '97cebd5c-0b1a-527b-b8fb-8053ee35f2a8' // gitleaks:allow — public authority_id (Danish Ministry of Defence)
+
+    await page.goto(`/c/${AUTH}/contracts`)
+    await demoMark(page, 'PROC-CONTRACT-SORT — open an authority contracts view')
+    await expect(page.locator('[data-testid="contracts-panel"]').first())
+      .toBeVisible({ timeout: 20_000 })
+    const table = page.locator('[data-testid="contracts-table"]')
+    await expect(table).toBeVisible({ timeout: 15_000 })
+
+    // Default view: dates run newest to oldest. Empty cells ('—') are
+    // contracts with no date; they sort last, so they end the sequence.
+    const dates = (await table.locator('tbody tr td:first-child').allTextContents())
+      .map((t) => t.trim())
+    expect(dates.length).toBeGreaterThan(1)
+    const dated = dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    expect(dated.length).toBeGreaterThan(1)
+    for (let i = 1; i < dated.length; i += 1) {
+      expect(dated[i] <= dated[i - 1]).toBe(true)
+    }
+    expect(dates.slice(dated.length).every((d) => !/^\d{4}/.test(d))).toBe(true)
+    await demoMark(page, 'Contracts open newest-first ✓', 2000)
+
+    // And the orderings the Value header asks for hold on the API, over
+    // the whole list rather than the page the UI happens to hold.
+    for (const [sort, ordered] of [
+      ['value_desc', (a, b) => b <= a],
+      ['value_asc', (a, b) => b >= a],
+    ]) {
+      const res = await request.get(
+        `/api/authorities/${AUTH}/contracts?limit=100&sort=${sort}`)
+      expect(res.ok()).toBe(true)
+      const rows = (await res.json()).contracts || []
+      const values = rows.map((c) => c.value_eur)
+      const present = values.filter((v) => v !== null && v !== undefined)
+      expect(present.length).toBeGreaterThan(1)
+      for (let i = 1; i < present.length; i += 1) {
+        expect(ordered(present[i - 1], present[i])).toBe(true)
+      }
+      // contracts with no value sort last, never first
+      expect(values.slice(present.length).every((v) => v === null || v === undefined)).toBe(true)
+    }
+    await demoMark(page, 'Value ordering holds across the whole list ✓', 2000)
+  })
+
   test('PROC-CONTRACT-DETAIL: a contract opens our detail page, which links out to the right TED notice', async ({ page, context }) => {
     // The flow the user asked for: clicking a contract opens OUR detail
     // page (with the integrity profile), and from there an outward link
