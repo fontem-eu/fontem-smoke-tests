@@ -59,6 +59,20 @@ async function pickRegion(panel, code) {
   }).toPass({ timeout: 20_000 })
 }
 
+/** Assert a region is offered for a term, without knowing its position.
+ *
+ * Same retry reasoning as pickRegion: the list is a computed over data that
+ * lands asynchronously — the catalogue on mount, the cross-language index on
+ * first focus — so a term typed before the index arrives legitimately matches
+ * nothing for a moment.
+ */
+async function expectOffered(panel, term, code) {
+  await expect(async () => {
+    await panel.getByTestId('region-input').fill(term)
+    await expect(panel.getByTestId(`region-option-${code}`)).toBeVisible({ timeout: 2000 })
+  }).toPass({ timeout: 20_000 })
+}
+
 test.describe('briefings', () => {
   test.setTimeout(120_000)
 
@@ -148,6 +162,46 @@ test.describe('briefings', () => {
     // PT192 is one item; the prefix filter has to actually discriminate.
     await pickRegion(panel, 'PT192')
     await expect(items.locator('li')).toHaveCount(1)
+  })
+
+  test('BRIEF-10: a region is findable by its name in any EU language', async ({ page }) => {
+    /** Eurostat publishes two names per region — the national-language one
+     *  and its Latin transliteration — so the picker used to be searchable
+     *  only in the region's own alphabet. "Attica" found nothing, and EL3
+     *  was reachable by its code alone, which made a Greek subscription look
+     *  impossible to create. */
+    await page.getByTestId('briefing-e2e-smoke').click()
+    const panel = page.getByTestId('panel-e2e-smoke')
+
+    for (const [term, code] of [
+      ['Attica', 'EL3'],        // English, from the gazetteer
+      ['Attiki', 'EL3'],        // Eurostat's transliteration
+      ['Αττική', 'EL3'],        // the national-language name
+      ['αττικη', 'EL3'],        // and it without the accents
+      ['Lisbonne', 'PT1A0'],    // French, inherited from the code it replaced
+      ['Lisboa', 'PT1A0'],
+      ['Athina', 'EL303'],      // the metro region, not the classification name
+    ]) {
+      await expectOffered(panel, term, code)
+    }
+  })
+
+  test('BRIEF-11: a subscription can be created for a Greek region', async ({ page }) => {
+    await page.getByTestId('briefing-e2e-smoke').click()
+    const panel = page.getByTestId('panel-e2e-smoke')
+
+    await expectOffered(panel, 'Attica', 'EL3')
+    await panel.getByTestId('region-option-EL3').click()
+    // Both forms stay visible: whatever language the name resolved in, the
+    // national-language one is what official documents print.
+    await expect(panel.getByTestId('region-selected')).toContainText('Αττική')
+
+    await panel.getByTestId('volume-e2e-smoke').selectOption('10')
+    await panel.getByTestId('add-e2e-smoke').click()
+
+    const subs = page.getByTestId('subscriptions')
+    await expect(subs.locator('.bf-sub-row')).toHaveCount(1)
+    await expect(subs.locator('.bf-chip[title="EL3"]')).toBeVisible()
   })
 
   test('BRIEF-05: watched items appear in the reading list, tagged by briefing', async ({ page }) => {
