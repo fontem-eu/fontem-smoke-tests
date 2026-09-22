@@ -4013,4 +4013,84 @@ test.describe.serial('Production Smoke Tests', () => {
       }, { id: capStoryId, tok: token })
     }
   })
+  // ── /api/nuts — the public NUTS reference API ────────────────────────
+  //
+  // This one is published for other people's code, so the contract is the
+  // product: field names, the search resolving a name in any of the 24
+  // languages, and the bulk formats. Checked over raw requests because
+  // that is how a consumer calls it — no browser involved.
+
+  test('NUTS-API-1: the service says what it serves and how complete it is', async ({ request }) => {
+    const r = await request.get('/api/nuts')
+    expect(r.status()).toBe(200)
+    const body = await r.json()
+    expect(body.languages).toHaveLength(24)
+    expect(body.nuts_version).toBeTruthy()
+    // Coverage is uneven and the API reports it rather than implying
+    // completeness — a consumer deciding whether to rely on this needs the
+    // number, not a promise.
+    expect(body.coverage.regions).toBeGreaterThan(1500)
+    expect(body.coverage.with_translations).toBeLessThan(body.coverage.regions)
+    expect(body.sources.map((s) => s.id).sort()).toEqual(['euvoc', 'eurostat', 'wikidata'].sort())
+    for (const source of body.sources) {
+      expect(source.licence, `${source.id} needs a licence`).toBeTruthy()
+      expect(source.attribution, `${source.id} needs an attribution`).toBeTruthy()
+    }
+  })
+
+  test('NUTS-API-2: a region name in any language resolves to its code', async ({ request }) => {
+    /** The thing Eurostat cannot answer. Each case is a different path
+     *  through the gazetteer: a translated label, the transliteration, the
+     *  national-language name without accents, a label inherited from the
+     *  code a 2024 renumbering replaced, and a metro-region alias. */
+    for (const [q, code] of [
+      ['Attica', 'EL3'],
+      ['Attiki', 'EL3'],
+      ['αττικη', 'EL3'],
+      ['Lisbonne', 'PT1A0'],
+      ['Athina', 'EL303'],
+    ]) {
+      const r = await request.get(`/api/nuts/search?q=${encodeURIComponent(q)}`)
+      expect(r.status(), `search ${q}`).toBe(200)
+      const codes = (await r.json()).matches.map((m) => m.code)
+      expect(codes, `"${q}" should find ${code}`).toContain(code)
+    }
+    // And it says which form matched, in which language, so a caller can
+    // show why rather than ask the user to trust the hit.
+    const fr = await (await request.get('/api/nuts/search?q=Lisbonne&lang=fr')).json()
+    const hit = fr.matches.find((m) => m.code === 'PT1A0')
+    expect(hit.matched_language).toBe('fr')
+    expect(hit.matched).toContain('Lisbonne')
+  })
+
+  test('NUTS-API-3: one region carries both Eurostat forms and its provenance', async ({ request }) => {
+    const r = await request.get('/api/nuts/regions/EL3')
+    expect(r.status()).toBe(200)
+    const body = await r.json()
+    expect(body.name_native).toBe('Αττική')
+    expect(body.name_latn).toBe('Attiki')
+    expect(body.names.en).toBeTruthy()
+    expect(body.names.el).toBeTruthy()
+    expect(body.sources.length).toBeGreaterThan(0)
+    expect(body.ancestors.map((a) => a.code)).toContain('EL')
+    // A code that no vintage has is a 404, not an empty skeleton.
+    expect((await request.get('/api/nuts/regions/ZZ9')).status()).toBe(404)
+  })
+
+  test('NUTS-API-4: the bulk formats are fetchable and cacheable', async ({ request }) => {
+    const csv = await request.get('/api/nuts/regions.csv')
+    expect(csv.status()).toBe(200)
+    expect(csv.headers()['content-type']).toContain('text/csv')
+    const lines = (await csv.text()).split('\n')
+    expect(lines[0]).toBe('code,level,country,parent,language,name,kind')
+    expect(lines.length).toBeGreaterThan(30_000)
+
+    const bulk = await request.get('/api/nuts/gazetteer.json')
+    expect(bulk.status()).toBe(200)
+    expect(Object.keys((await bulk.json()).regions).length).toBeGreaterThan(1500)
+    // Reference data rebuilt a few times a year: a consumer polling it
+    // should be able to cache, and a browser app should be able to read it.
+    expect(bulk.headers()['cache-control']).toContain('public')
+    expect(bulk.headers()['access-control-allow-origin']).toBe('*')
+  })
 })
