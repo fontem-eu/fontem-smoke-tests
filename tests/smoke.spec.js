@@ -4081,7 +4081,9 @@ test.describe.serial('Production Smoke Tests', () => {
     const csv = await request.get('/api/nuts/regions.csv')
     expect(csv.status()).toBe(200)
     expect(csv.headers()['content-type']).toContain('text/csv')
-    const lines = (await csv.text()).split('\n')
+    // CRLF: csv.writer emits RFC 4180 line endings, which is what a
+    // spreadsheet expects and what a naive split('\n') leaves a \r on.
+    const lines = (await csv.text()).split(/\r?\n/)
     expect(lines[0]).toBe('code,level,country,parent,language,name,kind')
     expect(lines.length).toBeGreaterThan(30_000)
 
