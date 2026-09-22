@@ -61,7 +61,10 @@ test.describe('data studio — server-backed projects, queries, plots', () => {
     const tf = page.locator('[data-testid="plot-transform-sql"] .cm-content')
     await tf.click()
     await page.keyboard.press('ControlOrMeta+a')
-    await page.keyboard.type('SELECT count(*) AS companies, sum(contracts) AS total FROM q1')
+    // Columns come from the Cypher sample the query step ran, so these two
+    // move together: it returns supplier/contract/value_eur now that the
+    // default is LIMIT-bounded rather than an aggregate (fontem-web#575).
+    await page.keyboard.type('SELECT count(*) AS contracts, sum(value_eur) AS total_eur FROM q1')
     await page.click('[data-testid="plot-combine"]')
     await expect(page.locator('[data-testid="plot-result"]')).toBeVisible({ timeout: 45_000 })
     const resultText = (await page.locator('[data-testid="plot-result"]').textContent()) || ''
