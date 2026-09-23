@@ -121,10 +121,9 @@ for (const loc of LOCALES) {
     // A second i18n-driven label that lives in body content — proves
     // template strings (not just <head>) re-render.
     // `/` is the MIXED landing feed, so its subtitle names both halves —
-    // articles and briefing findings. The stories-only page at
-    // /stories-feed keeps the older "public data stories" wording; these
-    // expectations follow the landing page because that is where this
-    // test navigates.
+    // articles and briefing findings. The stories-only view (?show=stories)
+    // keeps the older "public data stories" wording; these expectations
+    // follow the unfiltered feed because that is where this test navigates.
     const feedSub = page.locator('.feed-sub').first()
     await expect(feedSub).toContainText(loc.feedSubContains)
 
