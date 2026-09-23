@@ -178,10 +178,12 @@ test.describe.serial('Production Smoke Tests', () => {
     //
     // Rewritten for the nav rail. Two things moved and this test kept
     // asserting the old shape: the entry is `nav-data-stats` (it was
-    // `nav-explore`), and Explore now leads the data group with Atlas
-    // directly after it, rather than trailing Map. The href is the
-    // stable contract, so pin that and the adjacency, not a global
-    // index into every nav item.
+    // `nav-explore`), and Explore leads the data group with Dashboards
+    // directly after it. The href is the stable contract, so pin that
+    // and the adjacency, not a global index into every nav item.
+    //
+    // Atlas left the data group (fontem-web #578): it sits with the
+    // reading entries, Feed → Petitions → Atlas, above Explore.
     await page.goto('/')
     await demoMark(page, 'NAV-EXPLORE — verify the Explore entry')
     const explore = page.locator('[data-testid="nav-data-stats"]')
@@ -190,14 +192,19 @@ test.describe.serial('Production Smoke Tests', () => {
     const navHrefs = await page.locator('[data-testid^="nav-"]').evaluateAll(
       (els) => els.map((e) => e.getAttribute('href')),
     )
+    const feedIdx = navHrefs.indexOf('/')
+    const petIdx = navHrefs.indexOf('/petitions')
     const mapIdx = navHrefs.indexOf('/map')
     const explIdx = navHrefs.indexOf('/explore')
     const dashIdx = navHrefs.indexOf('/data-quality')
     expect(explIdx).toBeGreaterThanOrEqual(0)
-    // data group order: Explore → Dashboards → Atlas/Map (fontem-web #376)
+    // data group order: Explore → Dashboards (fontem-web #376)
     expect(dashIdx).toBe(explIdx + 1)
-    expect(mapIdx).toBe(explIdx + 2)
-    await demoMark(page, 'Explore → Dashboards → Atlas order ✓', 2000)
+    // reading group: Feed → Petitions → Atlas, before the data group
+    expect(petIdx).toBe(feedIdx + 1)
+    expect(mapIdx).toBe(petIdx + 1)
+    expect(mapIdx).toBeLessThan(explIdx)
+    await demoMark(page, 'Feed → Petitions → Atlas, then Explore → Dashboards ✓', 2000)
 
     // Click into the hub — the Data Quality card lands on /data-quality.
     await explore.click()
