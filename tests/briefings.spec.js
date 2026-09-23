@@ -209,11 +209,15 @@ test.describe('briefings', () => {
     await page.getByTestId('panel-e2e-smoke').getByTestId('add-e2e-smoke').click()
     await expect(page.getByTestId('subscriptions').locator('.bf-sub-row')).toHaveCount(1)
 
-    await page.goto('/my-briefings')
-    const items = page.getByTestId('items')
-    await expect(items.getByText(FIXTURE_TITLE).first()).toBeVisible()
+    // The reading list is the feed's briefings view now; /my-briefings
+    // redirects there. The selectors are the card's own, which the feed
+    // has rendered since before the merge, so this passes against a
+    // fontem-web on either side of it.
+    await page.goto('/?show=briefings')
+    const items = page.locator('li[data-testid^="feed-briefing-"]')
+    await expect(items.getByText(FIXTURE_TITLE).first()).toBeVisible({ timeout: 30_000 })
     // Every entry says which briefing produced it.
-    await expect(items.getByTestId('source-tag').first()).toHaveText(FIXTURE)
+    await expect(items.first().getByTestId('feed-briefing-source')).toHaveText(FIXTURE)
   })
 
   // BRIEF-06 and BRIEF-07 are marked fixme rather than left silently
@@ -234,7 +238,7 @@ test.describe('briefings', () => {
   //
   // What is left: BRIEF-06 clears its watches, creates two through the
   // UI, then finds no fixture items in the reading list. Rendering is not
-  // the cause -- /my-briefings shows 6 items and all 6 are anchors -- so
+  // the cause -- the reading list showed 6 items and all 6 were anchors -- so
   // it is something in the create-watch-then-read sequence. BRIEF-07 then
   // cascades: it reads watches[0].feed_url and there is no watch.
   // Diagnosing that needs someone who knows the intended subscription
@@ -251,8 +255,10 @@ test.describe('briefings', () => {
     await panel.getByTestId('add-e2e-smoke').click()
     await expect(page.getByTestId('subscriptions').locator('.bf-sub-row')).toHaveCount(2)
 
-    await page.goto('/my-briefings')
-    const titles = await page.getByTestId('items').locator('li a').allTextContents()
+    await page.goto('/?show=briefings')
+    const items = page.locator('li[data-testid^="feed-briefing-"]')
+    await expect(items.getByText(FIXTURE_TITLE).first()).toBeVisible({ timeout: 30_000 })
+    const titles = await items.locator('a').allTextContents()
     const fixtures = titles.filter((t) => FIXTURE_TITLE.test(t))
     expect(fixtures.length).toBeGreaterThan(0)
     expect(new Set(fixtures).size).toBe(fixtures.length)
@@ -336,12 +342,32 @@ test.describe('briefing card links', () => {
   /** Entity routes a briefing item is allowed to point at. */
   const ENTITY_PATH = /^\/(contract|company|authority|lobbyist)\/[^/]+/
 
+  /**
+   * Page the feed to its end.
+   *
+   * The feed shows twenty entries at a time, loads the next page as you
+   * scroll, and pauses for a click every five pages. A test that checks
+   * EVERY card has to get past both, or it checks the first page and
+   * calls that all of them. A feed that renders everything at once has
+   * no sentinel, and this returns straight away.
+   */
+  async function loadWholeFeed(page) {
+    const sentinel = page.getByTestId('feed-sentinel')
+    if (!(await sentinel.count())) return
+    const more = page.getByTestId('feed-load-more')
+    await expect(async () => {
+      if (await more.isVisible()) await more.click()
+      else await sentinel.scrollIntoViewIfNeeded()
+      await expect(page.getByTestId('feed-end')).toBeVisible({ timeout: 2_000 })
+    }).toPass({ timeout: 60_000 })
+  }
+
   /** A genuinely signed-out page: no storageState, no bootstrap token. */
   async function anonymousPage(browser) {
     const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } })
     const page = await ctx.newPage()
     await page.goto('/')
-    await expect(page.locator('[data-testid="feed-briefings"]')).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('li[data-testid^="feed-briefing-"]').first()).toBeVisible({ timeout: 30_000 })
     return { ctx, page }
   }
 
@@ -368,7 +394,7 @@ test.describe('briefing card links', () => {
     await expect(page.getByTestId('watching-e2e-smoke')).toContainText('1')
 
     await page.goto('/')
-    await expect(page.locator('[data-testid="feed-briefings"]')).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('li[data-testid^="feed-briefing-"]').first()).toBeVisible({ timeout: 30_000 })
     // Row 1: the single bidder with one flag.
     const card = page.locator('li[data-testid="feed-briefing-smoke-fixture:1"]')
     await expect(card).toBeVisible({ timeout: 15_000 })
@@ -412,6 +438,7 @@ test.describe('briefing card links', () => {
     // raw href sends a reader on staging to production. Every link must
     // have been reduced to a path first.
     const { ctx, page } = await anonymousPage(browser)
+    await loadWholeFeed(page)
     const links = page.locator('[data-testid^="feed-briefing-link-"]')
     const n = await links.count()
     expect(n, 'no briefing card offered a destination').toBeGreaterThan(0)
@@ -459,6 +486,7 @@ test.describe('briefing card links', () => {
    */
   test('BRIEF-LINK-5: every card link resolves to a record that exists', async ({ browser, request }) => {
     const { ctx, page } = await anonymousPage(browser)
+    await loadWholeFeed(page)
     const links = page.locator('[data-testid^="feed-briefing-link-"]')
     const n = await links.count()
     expect(n, 'no briefing card offered a destination').toBeGreaterThan(0)
@@ -525,7 +553,8 @@ test.describe('briefing card links', () => {
     // items are still news, so they render — as text, not as a link into
     // nothing.
     const { ctx, page } = await anonymousPage(browser)
-    const anchors = page.locator('[data-testid="feed-briefings"] a')
+    await loadWholeFeed(page)
+    const anchors = page.locator('li[data-testid^="feed-briefing-"] a')
     const n = await anchors.count()
     for (let i = 0; i < n; i++) {
       const href = await anchors.nth(i).getAttribute('href')
