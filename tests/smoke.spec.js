@@ -171,49 +171,34 @@ test.describe.serial('Production Smoke Tests', () => {
 
   // ── Authentication ─────────────────────────────────────────────
 
-  test('NAV-EXPLORE: the nav rail links to the Explore hub, which opens Data Quality', async ({ page }) => {
-    // Batch-5 item 5: the user asked for an Explore entry grouping the
-    // data-quality dashboards (and other browse-by-source surfaces)
-    // under one nav item.
+  test('NAV-DASHBOARDS: the nav rail opens the Data Quality dashboards', async ({ page }) => {
+    // The dashboards used to sit behind an "Explore" / "Stats" hub. The
+    // hub is retired (fontem-web, 2026-09-24 nav cleanup): Dashboards is a nav entry of its
+    // own, in the reading section after Atlas, and /explore redirects
+    // to /data-quality. The href is the stable contract, so pin that and
+    // the reading section's order, not a global index into every item.
     //
-    // Rewritten for the nav rail. Two things moved and this test kept
-    // asserting the old shape: the entry is `nav-data-stats` (it was
-    // `nav-explore`), and Explore leads the data group with Dashboards
-    // directly after it. The href is the stable contract, so pin that
-    // and the adjacency, not a global index into every nav item.
-    //
-    // Atlas left the data group (fontem-web #578): it sits with the
-    // reading entries, Feed → Petitions → Atlas, above Explore.
+    // Written to pass against fontem-web on either side of that change,
+    // so the promotion gate holds whichever lands first.
     await page.goto('/')
-    await demoMark(page, 'NAV-EXPLORE — verify the Explore entry')
-    const explore = page.locator('[data-testid="nav-data-stats"]')
-    await expect(explore).toBeVisible({ timeout: 10_000 })
-    await expect(explore).toHaveAttribute('href', '/explore')
+    await demoMark(page, 'NAV-DASHBOARDS — verify the Dashboards entry')
+    const dashboards = page.locator('[data-testid="nav-dashboards"]')
+    await expect(dashboards).toBeVisible({ timeout: 10_000 })
+    await expect(dashboards).toHaveAttribute('href', '/data-quality')
     const navHrefs = await page.locator('[data-testid^="nav-"]').evaluateAll(
       (els) => els.map((e) => e.getAttribute('href')),
     )
+    // reading section: Feed → Petitions → Atlas
     const feedIdx = navHrefs.indexOf('/')
     const petIdx = navHrefs.indexOf('/petitions')
     const mapIdx = navHrefs.indexOf('/map')
-    const explIdx = navHrefs.indexOf('/explore')
-    const dashIdx = navHrefs.indexOf('/data-quality')
-    expect(explIdx).toBeGreaterThanOrEqual(0)
-    // data group order: Explore → Dashboards (fontem-web #376)
-    expect(dashIdx).toBe(explIdx + 1)
-    // reading group: Feed → Petitions → Atlas, before the data group
     expect(petIdx).toBe(feedIdx + 1)
     expect(mapIdx).toBe(petIdx + 1)
-    expect(mapIdx).toBeLessThan(explIdx)
-    await demoMark(page, 'Feed → Petitions → Atlas, then Explore → Dashboards ✓', 2000)
+    await demoMark(page, 'Feed → Petitions → Atlas ✓', 1500)
 
-    // Click into the hub — the Data Quality card lands on /data-quality.
-    await explore.click()
-    await expect(page.locator('[data-testid="explore-view"]')).toBeVisible({ timeout: 10_000 })
-    const dqCard = page.locator('[data-testid="explore-card-data-quality"]')
-    await expect(dqCard).toBeVisible()
-    await dqCard.click()
+    await dashboards.click()
     await page.waitForURL('**/data-quality', { timeout: 10_000 })
-    await demoMark(page, 'Explore → Data Quality card opens the hub ✓', 2500)
+    await demoMark(page, 'Dashboards opens the Data Quality hub ✓', 2500)
   })
 
   test('FEED-TAG-PERSIST: a tag filter survives entering and leaving a story', async ({ page }) => {
