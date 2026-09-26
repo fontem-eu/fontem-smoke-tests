@@ -302,15 +302,16 @@ test.describe('data studio × assistant — query proposals', () => {
       await page.goto(`/studio/p/${pid}/q/${qid}`)
       await expect(page.locator('[data-testid="studio-query-view"]')).toBeVisible({ timeout: 15_000 })
 
-      // "Write it for me". The prompt used to name the editor's language;
-      // it no longer does — which store answers the question is the
-      // assistant's call (fontem-web, 2026-09-26). Matched loosely so this
-      // passes on both sides of that change; the unit tests pin the wording.
+      // "Write it for me". The prompt names no language: which store
+      // answers the question — the graph, the statistics, Virtuoso — is the
+      // assistant's call, and "Write a Cypher query" pinned it to one.
       await expect(page.locator('[data-testid="query-assist-hint"]')).toBeVisible()
       await page.click('[data-testid="query-assist-ask"]')
       await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
-      await expect(page.locator('[data-testid="assist-input"]'),
-        'the ask prefills a write prompt').toHaveValue(/Write a .*query that/i)
+      const askInput = page.locator('[data-testid="assist-input"]')
+      await expect(askInput, 'the ask prefills a write prompt').toHaveValue(/Write a query that/i)
+      await expect(askInput, 'the prompt must leave the store to the assistant')
+        .not.toHaveValue(/Cypher|SPARQL|SQL/)
 
       // A run that fails → "fix it", carrying the engine's error. The panel
       // is closed first so it cannot sit over the editor; the editor is
@@ -321,9 +322,14 @@ test.describe('data studio × assistant — query proposals', () => {
       await content.click()
       await page.keyboard.press('ControlOrMeta+a')
       await page.keyboard.type('MATCH (c:Compnay RETURN c')
+      // The ask is not only for an empty editor: it stays once there is text.
+      await expect(page.locator('[data-testid="query-assist-ask"]'),
+        'the ask must stay offered once the query has text').toBeVisible()
       await page.click('[data-testid="query-run"]')
       await expect(page.locator('[data-testid="query-error"]')).toBeVisible({ timeout: 25_000 })
+      // A failed run adds the fix NEXT TO the ask — both doors at once.
       await expect(page.locator('[data-testid="query-assist-fix"]')).toBeVisible()
+      await expect(page.locator('[data-testid="query-assist-ask"]')).toBeVisible()
       await page.click('[data-testid="query-assist-fix"]')
       await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
       await expect(page.locator('[data-testid="assist-input"]'),
