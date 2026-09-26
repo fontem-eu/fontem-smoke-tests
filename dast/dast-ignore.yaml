@@ -352,3 +352,37 @@ ignore:
     # corpus can grow without re-triage while a class change — a sudden
     # spread across many endpoints — still trips the tripwire and forces
     # somebody to look rather than being absorbed silently.
+
+  - alert: Cross-Domain Misconfiguration
+    reason: >-
+      Access-Control-Allow-Origin: * on the NUTS reference API is deliberate.
+      Every response under /api/nuts/ is the same public reference data for
+      every caller — region names in 24 languages, published for browser
+      apps, agents and vendoring — with nothing to authorise, and a browser
+      app that cannot read it cannot use the API at all. ZAP raises this
+      alert on any unauthenticated wildcard, which is what this is by design.
+    evidence: >-
+      Verified against the dast environment 2026-09-26, not assumed. The
+      wildcard is set in exactly one place, _public() in fontem-api
+      src/nuts_api/routers/regions.py; /api/geo/nuts-regions and /api/search
+      on the same host return no Access-Control-Allow-Origin at all. It is
+      safe because a wildcard origin and credentials are mutually exclusive
+      by specification — a browser attaches no cookies or Authorization to a
+      request answered with *, so no third-party page can read anything
+      user-specific through it. fontem-api#487 makes that an enforced
+      property instead of an observed one: tests/test_nuts_cors_scope.py
+      fails CI if any other module names the header, if anything allows
+      credentials cross-origin, or if any app or sub-app installs
+      CORSMiddleware.
+    added: 2026-09-26
+    # Scoped to the NUTS paths only. A wildcard anywhere else — an
+    # authenticated /capi route, a per-user /api route — is NOT covered and
+    # must fail the gate; that is what would turn this from a design choice
+    # into a hole.
+    url_regex: "/api/nuts(/|\\?|$)"
+    method: GET
+    # 2 observed 2026-09-25, both /api/nuts/regions with different query
+    # strings. Sized at 20: the suite exercises a handful of NUTS routes with
+    # varying parameters, and a sudden spread past that means something new
+    # is emitting it and wants a look.
+    max_instances: 20
