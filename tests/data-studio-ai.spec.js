@@ -302,12 +302,15 @@ test.describe('data studio × assistant — query proposals', () => {
       await page.goto(`/studio/p/${pid}/q/${qid}`)
       await expect(page.locator('[data-testid="studio-query-view"]')).toBeVisible({ timeout: 15_000 })
 
-      // Empty editor → "write it for me", naming the engine the user picked.
+      // "Write it for me". The prompt used to name the editor's language;
+      // it no longer does — which store answers the question is the
+      // assistant's call (fontem-web, 2026-09-26). Matched loosely so this
+      // passes on both sides of that change; the unit tests pin the wording.
       await expect(page.locator('[data-testid="query-assist-hint"]')).toBeVisible()
       await page.click('[data-testid="query-assist-ask"]')
       await expect(page.locator('[data-testid="assist-panel"]')).toBeVisible({ timeout: 5_000 })
       await expect(page.locator('[data-testid="assist-input"]'),
-        'the write prompt must name the query language').toHaveValue(/Cypher/)
+        'the ask prefills a write prompt').toHaveValue(/Write a .*query that/i)
 
       // A run that fails → "fix it", carrying the engine's error. The panel
       // is closed first so it cannot sit over the editor; the editor is
@@ -318,8 +321,6 @@ test.describe('data studio × assistant — query proposals', () => {
       await content.click()
       await page.keyboard.press('ControlOrMeta+a')
       await page.keyboard.type('MATCH (c:Compnay RETURN c')
-      await expect(page.locator('[data-testid="query-assist-hint"]'),
-        'the hint is for an empty editor only').toHaveCount(0)
       await page.click('[data-testid="query-run"]')
       await expect(page.locator('[data-testid="query-error"]')).toBeVisible({ timeout: 25_000 })
       await expect(page.locator('[data-testid="query-assist-fix"]')).toBeVisible()
