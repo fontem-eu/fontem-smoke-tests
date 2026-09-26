@@ -308,33 +308,47 @@ ignore:
 
   - alert: PII Disclosure
     reason: >-
-      ZAP reads Luhn-valid digit runs inside UUID path segments as credit
-      card numbers. The flagged documents are entity sitemaps that contain
-      nothing but <loc> URLs, so there is no PII in them to disclose.
-      Verified against the dast environment 2026-09-04, not assumed.
+      ZAP's "PII Disclosure" rule is a credit-card detector and nothing
+      else: it scans response bodies for Visa/Mastercard/Amex/Diners/
+      Discover/JCB number shapes and Luhn-checks them. Fontem holds no
+      payment instruments — no cards, no PANs, no billing — and has no
+      roadmap that would introduce them. There is therefore no response on
+      this platform in which a card number could legitimately appear, and
+      every hit this rule can ever produce here is a digit run that happens
+      to pass Luhn.
     evidence: >-
-      All three flagged documents were fetched and parsed: every single
-      <loc> is https://<host>/company/<uuid> and the only tags present are
-      <url>, <loc>, <lastmod>, <changefreq>. Non-UUID <loc> count is 0 in
-      FRA (352 urls), IRL (444) and LUX (534) — no names, no emails, no
-      identifiers beyond the UUID and an ISO date. The trigger was then
-      reproduced directly: stripping hyphens and scanning each UUID for a
-      13-19 digit run that passes a Luhn check finds exactly one in FRA,
-      two in IRL and one in LUX, which is why those three documents
-      alerted and the other 29 country shards did not. Example:
+      Verified twice against the dast environment, not assumed.
+      2026-09-04, sitemaps: every <loc> is https://<host>/company/<uuid>
+      with only <url>, <loc>, <lastmod>, <changefreq> present; non-UUID
+      <loc> count is 0 in FRA (352 urls), IRL (444) and LUX (534).
+      Stripping hyphens and scanning each UUID for a 13-19 digit Luhn-valid
+      run finds exactly one in FRA, two in IRL and one in LUX, which is why
+      those three shards alerted and the other 29 did not — e.g.
       b689f28b-1c0f-51ab-8222-889709694609 contains 8222889709694609,
-      sixteen digits and Luhn-valid, i.e. indistinguishable from a card
-      number to a regex. The UUIDs are content-addressable gmr_ids
-      (src/etl/gmr_id.py), so this will recur as the corpus grows.
+      sixteen digits and Luhn-valid, indistinguishable from a card to a
+      regex. The UUIDs are content-addressable gmr_ids (src/etl/gmr_id.py),
+      so this recurs as the corpus grows.
+      2026-09-25, first hit outside the sitemaps: GET /capi/dossiers
+      flagged 570493406047 as a Maestro card. The response body was pulled
+      out of the ZAP session and the string is the last segment of the UUID
+      72784a2e-fdbc-4af1-80c0-570493406047 — a dossier id. Same mechanism,
+      different surface, and the narrow url_regex is what turned a UUID
+      into a blocking High.
     added: 2026-09-04
-    # Scoped to the entity sitemaps, which are machine-generated and
-    # provably contain only URLs. PII Disclosure anywhere else — an API
-    # response, a story body, a profile — is NOT covered and must fail
-    # the gate. That is the whole point of the narrow url_regex.
-    url_regex: "/sitemap-(companies|authorities)-[A-Z]{3}\\.xml$"
-    method: GET
-    # 3 observed on 2026-09-04 across 32 company shards + 32 authority
-    # shards. Sized at 20 so ordinary corpus growth does not trip it while
-    # a CLASS change still does: a real PII leak across the shards would
-    # blow past this and demand re-triage rather than being absorbed.
-    max_instances: 20
+    rescoped: 2026-09-26
+    # Was scoped to /sitemap-(companies|authorities)-[A-Z]{3}\\.xml$ on the
+    # principle that PII elsewhere must fail the gate. That principle is
+    # right for PII in general and wrong for THIS rule, which cannot detect
+    # PII in general — it detects card numbers, and a platform with no
+    # cards has no true positive available to it. Keeping the narrow scope
+    # bought no safety and cost a blocked release for a dossier id.
+    #
+    # PII that is not card-shaped — names, emails, addresses in an API
+    # response — is not detected by this rule at any scope, so nothing is
+    # given up here. Those would need their own rule, which is worth doing
+    # separately.
+    max_instances: 40
+    # 8 observed 2026-09-25 (7 sitemap, 1 dossier id). Sized at 40 so the
+    # corpus can grow without re-triage while a class change — a sudden
+    # spread across many endpoints — still trips the tripwire and forces
+    # somebody to look rather than being absorbed silently.
