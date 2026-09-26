@@ -166,9 +166,17 @@ async function clearSession(page) {
   await page.reload()
 }
 
-test.describe.serial('Production Smoke Tests', () => {
-  let storyId = null
-
+// Serial only where the tests actually chain.
+//
+// These first tests read and navigate; none of them touches the story the
+// lifecycle below creates. They used to open the one 88-test
+// `describe.serial`, where a failure skips every test after it and a retry
+// re-runs the whole group. On 2026-09-26 that turned two slow reads into a
+// gate outage: SEARCH-04 (10.5 s against a 10 s wait) retried all 88 tests,
+// and PROC-MAP-COLORIZE (test 22, 30.9 s against 30 s) failing twice left
+// "66 did not run" — the failure after it could not even be seen. Out here a
+// flake retries itself, and a failure costs one test.
+test.describe('Production Smoke Tests', () => {
   // ── Authentication ─────────────────────────────────────────────
 
   test('NAV-DASHBOARDS: the nav rail opens the Data Quality dashboards', async ({ page }) => {
@@ -1165,6 +1173,14 @@ test.describe.serial('Production Smoke Tests', () => {
     await expect(page.locator('[data-testid="view-cat-procurement"]')).toBeVisible()
     await demoMark(page, 'Overview / Financials / Procurement still wired ✓', 2000)
   })
+
+})
+
+// The story lifecycle IS a chain. STORY-09 creates one story, and the tests
+// after it edit, review, translate, publish and finally delete that same
+// story through `storyId`. Serial is load-bearing here, and only here.
+test.describe.serial('Production Smoke Tests — story lifecycle', () => {
+  let storyId = null
 
   // ── Report Lifecycle (all via UI) ──────────────────────────────
 
