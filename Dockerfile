@@ -63,6 +63,13 @@ RUN curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/lin
 # able to break the run.
 RUN npx playwright install chromium
 
+# The browsers and ffmpeg Playwright downloaded are in no package database:
+# declare them for the image SBOM (docker-build-sign's coverage check).
+COPY sbom-declare.py /tmp/sbom-declare.py
+RUN mkdir -p /usr/share/void42/sbom \
+ && python3 /tmp/sbom-declare.py > /usr/share/void42/sbom/declared.json \
+ && rm /tmp/sbom-declare.py
+
 # Default target: TESTING, never production. e2e is a promotion gate —
 # it runs against testing before staging and against staging before
 # prod, and is not pointed at the live site. The promote workflows set
